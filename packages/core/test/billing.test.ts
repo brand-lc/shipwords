@@ -134,6 +134,7 @@ function packPayment(userId: string, ref: string, overrides: Partial<PaymentFact
     currency: 'usd',
     amountRefunded: 0,
     dispute: null,
+    metadataTrusted: true,
     userId,
     productId: 'pack_100',
     orderId: null,
@@ -223,6 +224,37 @@ describe('storing payments', () => {
     );
     expect(await response.json()).toMatchObject({ outcome: 'unmapped' });
     expect((await getBalance(db, userId)).available).toBe(0);
+  });
+
+  it('untrusted metadata (PayPal custom_id) grants only when the payment covers the list price in the list currency', async () => {
+    const userId = uid();
+    const untrusted = { metadataTrusted: false };
+    expect(await applyPayment(ctx(), packPayment(userId, 'pp_low', { ...untrusted, amount: 1 }))).toBe(
+      'unmapped',
+    );
+    expect(await applyPayment(ctx(), packPayment(userId, 'pp_eur', { ...untrusted, currency: 'eur' }))).toBe(
+      'unmapped',
+    );
+    expect(
+      await applyPayment(
+        ctx(),
+        packPayment(userId, 'pp_sub', {
+          ...untrusted,
+          productId: 'pro_month',
+          amount: 1000,
+          subscriptionRef: 'I-1',
+        }),
+      ),
+    ).toBe('unmapped');
+    expect((await getBalance(db, userId)).available).toBe(0);
+    expect(await applyPayment(ctx(), packPayment(userId, 'pp_ok', untrusted))).toBe('applied');
+    expect((await getBalance(db, userId)).available).toBe(100);
+  });
+
+  it('trusted metadata (Stripe) still grants a discounted payment from a promotion code', async () => {
+    const userId = uid();
+    expect(await applyPayment(ctx(), packPayment(userId, 'pi_promo', { amount: 500 }))).toBe('applied');
+    expect((await getBalance(db, userId)).available).toBe(100);
   });
 
   it('unpaid states are not stored', async () => {

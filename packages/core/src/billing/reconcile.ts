@@ -22,6 +22,14 @@ export interface ReconcileContext {
 function creditsFor(site: SiteConfig, fact: PaymentFact) {
   const product = fact.productId ? findProduct(site, fact.productId) : undefined;
   if (!product) return null;
+  // Untrusted metadata (PayPal custom_id) could be attached to any payment, so it must pay at least the list price in the list currency.
+  // Trusted metadata skips this: Stripe promotion codes legitimately charge less.
+  if (
+    !fact.metadataTrusted &&
+    (fact.currency !== product.price.currency.toLowerCase() || fact.amount < product.price.amount)
+  ) {
+    return null;
+  }
   if (product.kind === 'credits') {
     const expiresAt =
       product.expiresDays == null ? null : (fact.paidAt ?? Date.now()) + product.expiresDays * DAY;
@@ -64,7 +72,10 @@ export async function applyPayment(ctx: ReconcileContext, fact: PaymentFact): Pr
   const known = await db.query.payments.findFirst({ where });
   // Once a product is removed, new payments can't be granted, but already-granted payments must still be clawed back on refund or chargeback.
   if (!credits && !known) {
-    ctx.log?.('payment for unknown product', { paymentRef: fact.paymentRef, productId: fact.productId });
+    ctx.log?.('payment for unknown product or below list price', {
+      paymentRef: fact.paymentRef,
+      productId: fact.productId,
+    });
     return 'unmapped';
   }
 

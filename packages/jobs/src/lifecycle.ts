@@ -91,7 +91,11 @@ export async function markFailed(
   return job;
 }
 
-/** Failed and canceled jobs: refund credits (idempotent) and return guest quota (once). Succeeded jobs do nothing. */
+/**
+ * Failed and canceled jobs: refund credits (idempotent). Failed guest jobs also return their quota (once); canceled ones don't, because the
+ * upstream may already have charged us (a cancel just before the result lands), and returning it would let one guest loop create → cancel forever.
+ * Succeeded jobs do nothing.
+ */
 export async function settleFailure(db: Db, job: JobRow): Promise<void> {
   if (job.status !== 'failed' && job.status !== 'canceled') return;
   if (job.costCredits > 0 && job.userId) {
@@ -101,7 +105,7 @@ export async function settleFailure(db: Db, job: JobRow): Promise<void> {
       ref: job.id,
     });
   }
-  if (job.quotaJson && !job.quotaReleased) {
+  if (job.status === 'failed' && job.quotaJson && !job.quotaReleased) {
     // The quota decrements and the "returned" flag share one batch: each decrement is conditioned on the flag not being set,
     // so repeated calls return once, and a partial failure can't leave "flag set, count not returned".
     const notReleased = sql`exists (select 1 from ${jobs} where ${jobs.id} = ${job.id} and ${jobs.quotaReleased} = 0)`;

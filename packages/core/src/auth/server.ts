@@ -74,6 +74,18 @@ async function grantSignupBonus(deps: AuthDeps, userId: string, headers: Headers
   });
 }
 
+// Without a secret Better Auth silently falls back to a public default (it only refuses when NODE_ENV=production, which Workers never set),
+// and anyone could then sign session tokens. 32 characters rules out the .dev.vars.example placeholder too.
+function authSecret(env: CoreEnv): string {
+  const secret = env.BETTER_AUTH_SECRET;
+  if (typeof secret !== 'string' || secret.length < 32) {
+    throw new Error(
+      'BETTER_AUTH_SECRET must be set to at least 32 random characters (e.g. openssl rand -base64 32)',
+    );
+  }
+  return secret;
+}
+
 export function createAuth(deps: AuthDeps) {
   const { db, env, site } = deps;
   const google =
@@ -84,7 +96,9 @@ export function createAuth(deps: AuthDeps) {
   return betterAuth({
     appName: site.name,
     baseURL: deps.baseURL,
-    secret: env.BETTER_AUTH_SECRET,
+    secret: authSecret(env),
+    // Email change links are signed with the secret and sign the user in; we only use email OTP and Google, so the route stays off.
+    disabledPaths: ['/verify-email'],
     database: drizzleAdapter(db, {
       provider: 'sqlite',
       schema: {

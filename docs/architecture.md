@@ -165,6 +165,7 @@ An effect is a model entry in `site.models.ts` with an `effect` field: the user 
 
 - Guest quota is enforced by D1 counters per IP and per device cookie, plus a daily budget per site. reCAPTCHA v3 scores raise the bar.
 - A captcha only raises the cost of abuse; solving services are cheap. The real backstop is the quota and the daily site budget.
+- Failed guest jobs return their quota; cancelled ones don't, since the upstream may already have charged for them.
 - Guest results are attached to the new account after sign-in.
 - The sign-up bonus requires a verified email and blocks disposable domains, with a per-IP daily limit.
 

@@ -25,6 +25,11 @@ export interface PaymentFact {
   amountRefunded: number;
   /** open and lost are both clawed back in full; won means the dispute was decided in our favor. */
   dispute: 'open' | 'won' | 'lost' | null;
+  /**
+   * Whether only our server could have written the metadata below (Stripe: secret key only). When false (PayPal: client IDs are public,
+   * so anyone can create an order or subscription with any custom_id), credits are granted only if the payment covers the list price.
+   */
+  metadataTrusted: boolean;
   /** The following come from metadata written to the provider at checkout. */
   userId: string | null;
   productId: string | null;

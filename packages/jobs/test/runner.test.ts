@@ -252,6 +252,24 @@ describe('generation jobs', () => {
     expect(await consumeQuota(db, [rule])).toBe(true);
     expect(await consumeQuota(db, [rule])).toBe(false);
   });
+
+  it('canceled guest job keeps its quota spent, so create → cancel cannot loop past the daily limit', async () => {
+    const rule = { key: `guest:device:${crypto.randomUUID()}`, window: 'w', limit: 1 };
+    expect(await consumeQuota(db, [rule])).toBe(true);
+    const jobId = `job_${crypto.randomUUID().replaceAll('-', '')}`;
+    await db.insert(jobs).values({
+      id: jobId,
+      guestId: 'g_1',
+      modelId: 'fast',
+      kind: 'image',
+      prompt: 'x',
+      inputJson: JSON.stringify({ references: [], parameters: {} }),
+      quotaJson: JSON.stringify([rule]),
+      upstream: 'yir',
+    });
+    await markFailed(db, jobId, 'canceled', 'canceled', 'by user');
+    expect(await consumeQuota(db, [rule])).toBe(false);
+  });
 });
 
 describe('old Workflow replay', () => {
