@@ -22,6 +22,13 @@ export type PollResult =
   | { state: 'succeeded'; files: OutputFile[] }
   | { state: 'failed'; code: string; message: string };
 
+export interface UpstreamCost {
+  /** Amount charged so far (USD string). */
+  usd: string;
+  /** false while the upstream may still change the amount. */
+  settled: boolean;
+}
+
 export class UpstreamError extends Error {
   constructor(
     readonly code: string,
@@ -41,4 +48,6 @@ export interface UpstreamAdapter {
   /** Long poll: waits up to waitSeconds, returns immediately on a state change or completion. */
   poll(upstreamJobId: string, waitSeconds: number): Promise<PollResult>;
   cancel(upstreamJobId: string): Promise<void>;
+  /** What the upstream charged for this task; optional, an adapter without it leaves the job's cost unrecorded. */
+  cost?(upstreamJobId: string): Promise<UpstreamCost>;
 }

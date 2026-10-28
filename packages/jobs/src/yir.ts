@@ -1,6 +1,12 @@
 import { createNodeYirClient } from '@yir-ai/sdk/server';
 import type { StandardImageGenerationRequest, StandardVideoGenerationRequest } from '@yir-ai/sdk/shared';
-import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError } from './upstream';
+import {
+  type PollResult,
+  type SubmitInput,
+  type UpstreamAdapter,
+  type UpstreamCost,
+  UpstreamError,
+} from './upstream';
 
 type YirClient = ReturnType<typeof createNodeYirClient>;
 
@@ -94,6 +100,18 @@ export class YirAdapter implements UpstreamAdapter {
       state: 'succeeded',
       files: job.result.files.map((file) => ({ url: file.url, mediaType: file.media_type })),
     };
+  }
+
+  /** Billing can still be pending after the result lands. Only an explicit `settled` counts as final: Yir says absent or unknown status is unconfirmed. */
+  async cost(upstreamJobId: string): Promise<UpstreamCost> {
+    let job: Awaited<ReturnType<YirClient['getJob']>>;
+    try {
+      job = await this.client.getJob(upstreamJobId);
+    } catch (error) {
+      throw error instanceof UpstreamError ? error : toUpstreamError(error);
+    }
+    if (!job.billing) return { usd: '0', settled: false };
+    return { usd: job.billing.total_charged_by_yir, settled: job.billing.status === 'settled' };
   }
 
   async cancel(upstreamJobId: string) {

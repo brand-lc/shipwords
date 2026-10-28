@@ -74,6 +74,11 @@ export async function markSucceeded(db: Db, jobId: string, outputs: StoredOutput
   return result.meta.changes > 0;
 }
 
+/** Record the upstream charge of an ended job; only bookkeeping, it never touches state or credits, so a re-read simply overwrites it. */
+export async function recordUpstreamCost(db: Db, jobId: string, usd: string): Promise<void> {
+  await db.update(jobs).set({ upstreamCostUsd: usd }).where(eq(jobs.id, jobId)).run();
+}
+
 /** Move an in-progress job to failed or canceled, then settle the refund. If the job already ended the state isn't changed, but settlement still runs. */
 export async function markFailed(
   db: Db,

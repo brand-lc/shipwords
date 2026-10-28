@@ -27,6 +27,8 @@ export const jobs = sqliteTable(
       .default('queued'),
     upstream: text('upstream').notNull(),
     upstreamJobId: text('upstream_job_id'),
+    /** What the upstream actually charged (USD string), summed over every upstream task; null until read or when the upstream doesn't report it. */
+    upstreamCostUsd: text('upstream_cost_usd'),
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
     /** R2 key and content type of the output. */

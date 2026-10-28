@@ -133,12 +133,13 @@ One state machine is shared by all providers.
 
 ## 6. Generation jobs
 
-- **Adapter interface:** `submit` / `poll` / `cancel`. Adapters never touch the database or credits. Submitting twice with the same idempotency key must return the same upstream job. Yir is the default upstream ([yir.ai](https://yir.ai/?utm_source=shipwords&utm_medium=docs)); add another upstream by implementing the same interface.
+- **Adapter interface:** `submit` / `poll` / `cancel`, plus an optional `cost`. Adapters never touch the database or credits. Submitting twice with the same idempotency key must return the same upstream job. Yir is the default upstream ([yir.ai](https://yir.ai/?utm_source=shipwords&utm_medium=docs)); add another upstream by implementing the same interface.
 - **Model registry:** each site declares its models in `site.models.ts`: upstream model, credit cost, guest eligibility, allowed parameters, reference limit, per-job upstream cost cap (`maxCost`) and timeout.
 - **Charging:** credits are debited with the job ID as the idempotency key, after a balance check, before submitting upstream. The job ID is also the upstream idempotency key.
 - **One-way states:** conditional updates prevent a failed or cancelled job from becoming succeeded. Failed and cancelled jobs are refunded from their final state.
 - **No retries on upstream failure:** Yir already retries the task across providers and the SDK retries transient HTTP errors, so a failed upstream job or a rejected submit fails the job at once with a refund. Only a 429 rate limit on submit, or a failed status read, gets Workflow step retries.
 - **Finish email:** with `EMAIL` bound, signed-in users get an email when a job succeeds (result link) or fails (not charged, credits back). It is sent after the refund settles; cancelled and guest jobs get none.
+- **Upstream cost:** after a job ends (succeeded or failed), the Workflow reads `cost` for every upstream job and stores the sum in `jobs.upstream_cost_usd`. Billing can settle after the result lands, so it re-reads up to 4 times, 30 s apart, writing each complete read; only an explicit `settled` status ends the wait. Best-effort: a read failure is only logged and keeps the last amount written. Not counted: prep hedge copies and jobs cancelled by the user (the cancel terminates the Workflow first).
 - **Cancel** also terminates the Workflow instance.
 - **Observability:** per-stage timestamps and error classification; side effects run in `waitUntil`.
 - **Resumable UI:** in-flight jobs resume after a page refresh.

@@ -8,9 +8,15 @@ import { describe, expect, it } from 'vitest';
 import { loadJob, markFailed, markSucceeded, spendKey } from '../src/lifecycle';
 import { defineModels } from '../src/models';
 import { emailOnFinish } from '../src/notify';
-import { runGeneration, type StepRunner } from '../src/runner';
+import { runGeneration, type StepRunner, sumUsd } from '../src/runner';
 import { jobs } from '../src/schema';
-import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError } from '../src/upstream';
+import {
+  type PollResult,
+  type SubmitInput,
+  type UpstreamAdapter,
+  type UpstreamCost,
+  UpstreamError,
+} from '../src/upstream';
 import { buildYirRequest, YirAdapter } from '../src/yir';
 
 const db = createDb(env.DB);
@@ -200,7 +206,7 @@ describe('generation jobs', () => {
     adapter.polls = [{ state: 'failed', code: 'YIR_EXECUTION_FAILED', message: 'provider down' }];
     const steps: string[] = [];
     await runGeneration({ ...deps(adapter), notify }, jobId, immediateSteps(steps));
-    expect(steps.slice(-2)).toEqual(['settle', 'notify']);
+    expect(steps.slice(-3)).toEqual(['settle', 'notify', 'cost:0']);
     expect(balanceAtSend).toBe(50);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
@@ -329,7 +335,7 @@ describe('old Workflow replay', () => {
     adapter.polls = [{ state: 'succeeded', files: [{ url: 'https://up/x.png', mediaType: 'image/png' }] }];
     await runGeneration(deps(adapter), jobId, steps);
     expect(adapter.submits.map((s) => s.key)).toEqual([jobId]);
-    expect(names).toEqual(['load', 'submit', 'poll:0', 'store', 'finish', 'settle']);
+    expect(names).toEqual(['load', 'submit', 'poll:0', 'store', 'finish', 'settle', 'cost:0']);
     expect((await loadJob(db, jobId))?.status).toBe('succeeded');
   });
 });
@@ -342,7 +348,7 @@ describe('settlement catch-up', () => {
     expect((await getBalance(db, userId)).available).toBe(40);
     const steps: string[] = [];
     await runGeneration(deps(new FakeAdapter()), jobId, immediateSteps(steps));
-    expect(steps.at(-1)).toBe('settle');
+    expect(steps.slice(-2)).toEqual(['settle', 'cost:0']);
     expect((await getBalance(db, userId)).available).toBe(50);
   });
 });
@@ -428,5 +434,154 @@ describe('Yir request', () => {
         references: [{ role: 'reference_image', url: 'https://x/a.png' }],
       },
     });
+  });
+});
+
+/** Fake upstream that also reports charges: a queue of readings per task, the last one repeating. */
+class CostingAdapter extends FakeAdapter {
+  charges = new Map<string, UpstreamCost[]>();
+  costError: Error | null = null;
+  /** Reads that succeed before costError starts applying. */
+  readsBeforeError = 0;
+  async cost(id: string) {
+    if (this.costError && this.readsBeforeError-- <= 0) throw this.costError;
+    const queue = this.charges.get(id) ?? [];
+    return (queue.length > 1 ? queue.shift() : queue[0]) ?? { usd: '0', settled: true };
+  }
+}
+
+describe('upstream cost', () => {
+  const done = { state: 'succeeded' as const, files: [{ url: 'https://up/x.png', mediaType: 'image/png' }] };
+
+  it('records the settled charge after the job ends, after notify', async () => {
+    const { jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [done];
+    adapter.charges.set(`up_${jobId}`, [{ usd: '3.06', settled: true }]);
+    const steps: string[] = [];
+    await runGeneration({ ...deps(adapter), notify: async () => {} }, jobId, immediateSteps(steps));
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', upstreamCostUsd: '3.06' });
+    expect(steps.slice(-3)).toEqual(['settle', 'notify', 'cost:0']);
+  });
+
+  it('waits while billing is pending, then records the settled amount', async () => {
+    const { jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [done];
+    adapter.charges.set(`up_${jobId}`, [
+      { usd: '0', settled: false },
+      { usd: '3.06', settled: true },
+    ]);
+    const steps: string[] = [];
+    await runGeneration(deps(adapter), jobId, immediateSteps(steps));
+    expect((await loadJob(db, jobId))?.upstreamCostUsd).toBe('3.06');
+    expect(steps.slice(-3)).toEqual(['cost:0', 'cost-wait:0', 'cost:1']);
+  });
+
+  it('still pending after the last read: keeps the latest amount and logs it', async () => {
+    const { jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [done];
+    adapter.charges.set(`up_${jobId}`, [{ usd: '1.5', settled: false }]);
+    const logs: string[] = [];
+    const steps: string[] = [];
+    await runGeneration(
+      { ...deps(adapter), log: (message: string) => logs.push(message) },
+      jobId,
+      immediateSteps(steps),
+    );
+    expect((await loadJob(db, jobId))?.upstreamCostUsd).toBe('1.5');
+    expect(steps.filter((name) => name.startsWith('cost:'))).toEqual([
+      'cost:0',
+      'cost:1',
+      'cost:2',
+      'cost:3',
+    ]);
+    expect(steps).not.toContain('cost-wait:3');
+    expect(logs).toContain('upstream cost not settled');
+  });
+
+  it('a read that fails after a pending one keeps the amount already seen', async () => {
+    const { jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [done];
+    adapter.charges.set(`up_${jobId}`, [{ usd: '3.06', settled: false }]);
+    adapter.costError = new Error('down');
+    adapter.readsBeforeError = 1;
+    const logs: string[] = [];
+    await runGeneration(
+      { ...deps(adapter), log: (message: string) => logs.push(message) },
+      jobId,
+      immediateSteps(),
+    );
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', upstreamCostUsd: '3.06' });
+    expect(logs).toContain('cost record failed');
+  });
+
+  it('failed jobs are charged too: the cost is recorded alongside the refund', async () => {
+    const { userId, jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [{ state: 'failed', code: 'bad', message: 'no' }];
+    adapter.charges.set(`up_${jobId}`, [{ usd: '0.4', settled: true }]);
+    await runGeneration(deps(adapter), jobId, immediateSteps());
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', upstreamCostUsd: '0.4' });
+    expect((await getBalance(db, userId)).available).toBe(50);
+  });
+
+  it('sums every upstream task and skips rejected-prep placeholders', async () => {
+    const { jobId } = await paidJob(10, { status: 'failed', upstreamJobId: 'up_a,skipped:prep-x,up_b' });
+    const adapter = new CostingAdapter();
+    adapter.charges.set('up_a', [{ usd: '0.0085', settled: true }]);
+    adapter.charges.set('up_b', [{ usd: '3.06', settled: true }]);
+    await runGeneration(deps(adapter), jobId, immediateSteps());
+    expect((await loadJob(db, jobId))?.upstreamCostUsd).toBe('3.0685');
+  });
+
+  it('a failing cost read never changes the job; adapters without cost leave it null', async () => {
+    const { jobId } = await paidJob();
+    const adapter = new CostingAdapter();
+    adapter.polls = [done];
+    adapter.costError = new Error('down');
+    const logs: string[] = [];
+    await runGeneration(
+      { ...deps(adapter), log: (message: string) => logs.push(message) },
+      jobId,
+      immediateSteps(),
+    );
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', upstreamCostUsd: null });
+    expect(logs).toContain('cost record failed');
+
+    const plain = await paidJob();
+    const fake = new FakeAdapter();
+    fake.polls = [done];
+    await runGeneration(deps(fake), plain.jobId, immediateSteps());
+    expect(await loadJob(db, plain.jobId)).toMatchObject({ status: 'succeeded', upstreamCostUsd: null });
+  });
+
+  it('sumUsd adds in micro-dollars without float drift', () => {
+    expect(sumUsd(['0.1', '0.2'])).toBe('0.3');
+    expect(sumUsd(['3.06', '0.0085'])).toBe('3.0685');
+    expect(sumUsd(['10', '0'])).toBe('10');
+    expect(sumUsd([])).toBe('0');
+    expect(() => sumUsd(['x'])).toThrow();
+  });
+
+  it('Yir: reads total_charged_by_yir; only an explicit settled status is final', async () => {
+    const reply = (billing: unknown) =>
+      new YirAdapter({ apiKey: 'k' }, { getJob: async () => ({ billing }) } as never).cost('j');
+    expect(await reply({ total_charged_by_yir: '3.06', status: 'settled' })).toEqual({
+      usd: '3.06',
+      settled: true,
+    });
+    expect(await reply({ total_charged_by_yir: '0' })).toEqual({ usd: '0', settled: false });
+    expect(await reply({ total_charged_by_yir: '2', status: 'refunding' })).toEqual({
+      usd: '2',
+      settled: false,
+    });
+    expect(await reply({ total_charged_by_yir: '1', status: 'pending' })).toEqual({
+      usd: '1',
+      settled: false,
+    });
+    expect(await reply(undefined)).toEqual({ usd: '0', settled: false });
   });
 });
