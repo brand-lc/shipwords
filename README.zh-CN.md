@@ -40,6 +40,8 @@ shipwords 是一套免费、MIT 开源的新词站群框架，用来在 Cloudfla
 
 ## 让编程 Agent 帮你建站
 
+还没想好做哪个词？[new-term-radar](https://github.com/zhuyansen/new-term-radar)（第三方开源项目）每天从 X、Hugging Face、GitHub 和 sitemap 里抓刚冒头的 AI 新词，比关键词工具早。
+
 把下面这句换成你的关键词，粘贴到 Claude Code、Codex 或 Cursor：
 
 ```text

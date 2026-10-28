@@ -40,6 +40,8 @@ The money code is shared and tested: double charges, repeated or out-of-order pa
 
 ## Build a site with your coding agent
 
+No keyword yet? [new-term-radar](https://github.com/zhuyansen/new-term-radar), a separate open-source project, catches new AI terms on X, Hugging Face, GitHub and sitemaps every day, before keyword tools list them.
+
 Paste this into Claude Code, Codex or Cursor, with your own keyword:
 
 ```text
