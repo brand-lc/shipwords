@@ -183,7 +183,7 @@ Goal: several AI sessions work in separate worktrees at once, a new worktree is 
 - `pnpm install` uses the global content-addressed store with hard links. Keep the store on the same disk as the repo, or hard links degrade into copies.
 - Secrets stay outside the repo in `~/.config/shipwords/<site>.dev.vars` (override with `SHIPWORDS_SECRETS`). `pnpm setup:worktree` copies them in.
 - Local D1, R2 and Workflows state lives in each worktree's own `.wrangler/state`.
-- Dev ports are derived from the site directory path, so worktrees never fight over a port.
+- Dev ports are derived from the site name in the main checkout (same port on every machine) and from the full path in a worktree, so worktrees never fight over a port.
 
 **Fewer merge conflicts**
 

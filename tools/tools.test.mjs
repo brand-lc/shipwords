@@ -5,15 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { checkSite } from './check-site.mjs';
-import { portFor } from './dev-port.mjs';
+import { isWorktree, portFor } from './dev-port.mjs';
 import { readSiteConfig, readStatus, setVar, TOOLS_ROOT } from './lib.mjs';
 import { createSite, parseArgs, validateSlug } from './new-site.mjs';
 import { listenArgs, parseVars } from './stripe-listen.mjs';
 
-test('dev port: stable per directory, different per worktree', () => {
-  assert.equal(portFor('/a/shipwords/sites/x'), portFor('/a/shipwords/sites/x'));
-  assert.notEqual(portFor('/a/shipwords/sites/x'), portFor('/a/shipwords-wt2/sites/x'));
-  const port = portFor('/any');
+test('dev port: main checkout keyed by site name, worktrees by path', () => {
+  assert.equal(portFor('/a/shipwords/sites/x', false), portFor('/b/elsewhere/sites/x', false));
+  assert.notEqual(portFor('/a/shipwords/sites/x', false), portFor('/a/shipwords/sites/y', false));
+  assert.equal(portFor('/a/wt1/sites/x', true), portFor('/a/wt1/sites/x', true));
+  assert.notEqual(portFor('/a/wt1/sites/x', true), portFor('/a/wt2/sites/x', true));
+  assert.equal(isWorktree(TOOLS_ROOT), fs.statSync(path.join(TOOLS_ROOT, '.git')).isFile());
+  const port = portFor('/any', false);
   assert.ok(port >= 5200 && port < 7200);
 });
 

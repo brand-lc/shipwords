@@ -82,7 +82,7 @@
       "group": "build"
     },
     {
-      // Port comes from the site directory's path (tools/dev-port.mjs); pnpm setup:worktree prints it and writes it to APP_URL.
+      // Port comes from the site name, or the path in a worktree (tools/dev-port.mjs); pnpm setup:worktree prints it and writes it to APP_URL.
       "label": "tinydeskai-example: dev server (pnpm dev)",
       "type": "shell",
       "command": "pnpm dev",
