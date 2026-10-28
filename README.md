@@ -1,8 +1,19 @@
-# shipwords
+<div align="center">
 
-[English](README.md) · [中文](README.zh-CN.md)
+<a href="https://shipwords.dev/"><img src="apps/www/public/img/og.jpg" alt="shipwords: One keyword. One site." width="100%"></a>
 
 **One keyword. One site. Taking payments the day it launches.**
+
+[![CI](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml/badge.svg)](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![TanStack Start](https://img.shields.io/badge/TanStack-Start-FF4154?logo=reactquery&logoColor=white)](https://tanstack.com/start)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![GitHub stars](https://img.shields.io/github/stars/shipwords-dev/shipwords?style=flat&logo=github)](https://github.com/shipwords-dev/shipwords/stargazers)
+
+**English** · [中文](README.zh-CN.md)
+
+</div>
 
 shipwords is a free, MIT-licensed starter for running a fleet of AI image and video sites, one per keyword, on Cloudflare. Accounts, payments, credits and AI generation are written once and shared; each site has its own pages, look and domain. Website: [shipwords.dev](https://shipwords.dev/).
 

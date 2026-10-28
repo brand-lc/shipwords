@@ -1,8 +1,19 @@
-# shipwords
+<div align="center">
 
-[English](README.md) · [中文](README.zh-CN.md)
+<a href="https://shipwords.dev/zh/"><img src="apps/www/public/img/og-zh.jpg" alt="shipwords：一个关键词，一个站。" width="100%"></a>
 
 **一个关键词，一个站，上线当天就能收钱。**
+
+[![CI](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml/badge.svg)](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![TanStack Start](https://img.shields.io/badge/TanStack-Start-FF4154?logo=reactquery&logoColor=white)](https://tanstack.com/start)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![GitHub stars](https://img.shields.io/github/stars/shipwords-dev/shipwords?style=flat&logo=github)](https://github.com/shipwords-dev/shipwords/stargazers)
+
+[English](README.md) · **中文**
+
+</div>
 
 shipwords 是一套免费、MIT 开源的代码，用来在 Cloudflare 上同时运营很多个 AI 图像和视频站，一个关键词一个站。账户、支付、积分和 AI 生成只写一次，所有站共用；每个站有自己的页面、外观和域名。官网：[shipwords.dev](https://shipwords.dev/zh/)。
 
