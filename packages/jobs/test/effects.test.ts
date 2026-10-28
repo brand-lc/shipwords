@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComposeInput, Composer, FacesInput } from '../src/compose';
 import { appendUpstreamJob, loadJob, markFailed, spendKey } from '../src/lifecycle';
-import { defineModels, effectParts, type ModelDefinition } from '../src/models';
+import { defineModels, type EffectSegment, effectParts, type ModelDefinition } from '../src/models';
 import { PREP_HEDGE_MS, runGeneration, type StepRunner } from '../src/runner';
 import { jobs } from '../src/schema';
 import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError } from '../src/upstream';
@@ -563,6 +563,29 @@ describe('effect compose', () => {
     ]);
   });
 
+  it('job created under an older config whose segments are gone (shots merged into one): fails and refunds, never composes base clips', async () => {
+    const { userId, jobId } = await composeJob({
+      left: '/files/uploads/up_a.png',
+      right: '/files/uploads/up_b.png',
+    });
+    const effect = composeModel.effect!;
+    const merged = defineModels([
+      {
+        ...composeModel,
+        effect: {
+          ...effect,
+          segments: [{ ...effect.segments[0]!, id: 'full', slots: effect.slots.map((slot) => slot.id) }],
+        },
+      },
+    ]);
+    const adapter = adapterFor(jobId);
+    const composer = new FakeComposer();
+    await runGeneration({ ...deps(adapter), models: merged, composer }, jobId, durableSteps());
+    expect(composer.calls).toHaveLength(0);
+    expect((await loadJob(db, jobId))?.status).toBe('failed');
+    expect((await getBalance(db, userId)).available).toBe(50);
+  });
+
   it('incomplete compose config errors at defineModels time', () => {
     const segments = composeModel.effect!.segments;
     expect(() =>
@@ -709,17 +732,91 @@ describe('effect compose', () => {
       expect((await getBalance(db, userId)).available).toBe(50);
     });
 
-    it('check errors: treated as a pass, delivered normally, no rerun, no refund', async () => {
+    it('check errors: whole job fails check_failed, no rerun, no compose, running segments canceled, refunded once', async () => {
       const { userId, jobId } = await checkJob();
       const adapter = adapterFor(jobId);
       const composer = new FakeComposer();
       composer.checkError = new Error('container cold');
       const log = vi.fn();
       await runGeneration({ ...checkDeps(adapter, composer), log }, jobId, durableSteps());
-      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'check_failed' });
       expect(adapter.submits).toHaveLength(2);
-      expect(log).toHaveBeenCalledWith('swap check errored, delivering as is', expect.anything());
-      expect((await getBalance(db, userId)).available).toBe(40);
+      expect(composer.calls).toHaveLength(0);
+      expect(adapter.cancelled).toEqual(expect.arrayContaining([`up_${jobId}:group`]));
+      expect(log).toHaveBeenCalledWith('swap check errored', expect.anything());
+      expect((await getBalance(db, userId)).available).toBe(50);
+      await markFailed(db, jobId, 'failed', 'again', 'again');
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('points with a time read the original at that time; segment cuts go to compose with the rendered output only', async () => {
+      const timed: ModelDefinition = {
+        ...checkModel,
+        id: 'demo-timed',
+        effect: {
+          ...checkModel.effect!,
+          segments: checkModel.effect!.segments.map((segment) =>
+            segment.id === 'left'
+              ? {
+                  ...segment,
+                  cuts: [1.5, 3],
+                  check: { ...leftCheck, faces: { left: [0.5, 0.4, 2.5] as const } },
+                }
+              : segment.id === 'right'
+                ? { ...segment, cuts: [1] }
+                : segment,
+          ),
+        },
+      };
+      const { jobId } = await checkJob();
+      await db.update(jobs).set({ modelId: 'demo-timed' }).where(eq(jobs.id, jobId));
+      const composer = new FakeComposer();
+      await runGeneration(
+        { ...checkDeps(adapterFor(jobId), composer), models: defineModels([timed]) },
+        jobId,
+        durableSteps(),
+      );
+      expect(composer.checks[0]!.points).toEqual([[0.5, 0.4, 2.5]]);
+      expect(composer.calls[0]!.segments).toEqual([
+        { key: `jobs/${jobId}/0.mp4`, target: 5.333, fit: 'trim', cuts: [1.5, 3] },
+        // right was not filled: its base clip already has the original timing, so no cuts.
+        { key: 'assets/demo/base-right.mp4', target: 3.375, fit: 'stretch' },
+        { key: `jobs/${jobId}/1.mp4`, target: 2.688, fit: 'stretch' },
+      ]);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+    });
+
+    it('bad cuts and timed points are rejected at defineModels time', () => {
+      const withLeft = (patch: Partial<EffectSegment>) => ({
+        ...checkModel,
+        effect: {
+          ...checkModel.effect!,
+          segments: checkModel.effect!.segments.map((segment) =>
+            segment.id === 'left' ? { ...segment, ...patch } : segment,
+          ),
+        },
+      });
+      for (const cuts of [[], [2, 1], [0], [5.333], [1, Number.NaN]])
+        expect(() => defineModels([withLeft({ cuts })])).toThrow(/cuts must increase/);
+      expect(() =>
+        defineModels([withLeft({ check: { ...leftCheck, faces: { left: [0.5, 0.4, 61] as const } } })]),
+      ).toThrow(/check.faces/);
+      expect(() =>
+        defineModels([
+          {
+            ...checkModel,
+            effect: {
+              ...checkModel.effect!,
+              compose: undefined,
+              segments: checkModel.effect!.segments.map((segment) => ({
+                ...segment,
+                check: undefined,
+                cuts: [1],
+              })),
+            },
+          },
+        ]),
+      ).toThrow(/cuts need compose/);
     });
 
     it('replay after interruption following rerun submit: rerun not resubmitted, check results reused from cache', async () => {

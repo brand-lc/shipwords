@@ -10,7 +10,7 @@ import {
   settleFailure,
   upstreamIds,
 } from './lifecycle';
-import { type JobPart, type ModelDefinition, PREP_REF } from './models';
+import { type FacePoint, type JobPart, type ModelDefinition, PREP_REF } from './models';
 import { type JobRow, TERMINAL } from './schema';
 import type { OutputFile, PollResult, SubmitInput, UpstreamAdapter } from './upstream';
 import { UpstreamError } from './upstream';
@@ -101,7 +101,7 @@ interface SegmentCheck {
   retries: number;
   /** Missing on checks cached by older versions (per-second SSIM): those jobs are delivered unchecked. */
   original?: string;
-  faces?: Readonly<Record<string, readonly [number, number]>>;
+  faces?: Readonly<Record<string, FacePoint>>;
   seconds: number;
 }
 
@@ -380,7 +380,8 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
   /**
    * Output check: if an original person this segment should replace is still in the output (swap didn't take) rerun this segment;
    * if reruns run out and it still didn't take, fail the whole job with a refund. Only slots the user filled are checked: the others keep the original on purpose.
-   * Errors in the check itself (container failure) count as a pass, so a broken checker never refunds a good video. Returns false if the job has ended.
+   * Errors in the check itself (container failure, unreadable output) fail the job with a refund: an unchecked video may be the original clip,
+   * and refunding one good video costs less than charging for a broken one. Returns false if the job has ended.
    */
   const verify = async (partId: string, index: number, check: SegmentCheck): Promise<boolean> => {
     const { original, faces } = check;
@@ -398,7 +399,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
           // Parts stored by older versions don't record their slots: check none rather than flag slots the user left as the original.
           const points = (partsOf(job, model)[index]!.slots ?? [])
             .map((slot) => faces[slot])
-            .filter((point): point is readonly [number, number] => Boolean(point));
+            .filter((point): point is FacePoint => Boolean(point));
           if (!deps.composer || points.length === 0) return { scores: [] as number[] };
           const scores = await deps.composer.faces({
             jobId,
@@ -410,10 +411,14 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
           return { scores };
         })
         .catch((error: unknown) => {
-          deps.log?.('swap check errored, delivering as is', { jobId, part: partId, error: String(error) });
-          return { scores: [] as number[] };
+          deps.log?.('swap check errored', { jobId, part: partId, error: String(error) });
+          return { errored: String(error) };
         });
       if ('stopped' in verdict) return false;
+      if ('errored' in verdict) {
+        await fail('check_failed', `${partId} output could not be checked: ${verdict.errored}`.slice(0, 500));
+        return false;
+      }
       const worst = Math.max(0, ...verdict.scores);
       if (worst < check.maxSimilarity) return true;
       deps.log?.('swap not applied', { jobId, part: partId, round, scores: verdict.scores });
@@ -627,13 +632,27 @@ async function composeOutputs(
 ): Promise<StoredOutput[] | null> {
   const job = await loadJob(deps.db, jobId);
   if (!job || TERMINAL.includes(job.status)) return null;
-  const effect = deps.models.find((m) => m.id === job.modelId)?.effect;
+  const model = deps.models.find((m) => m.id === job.modelId);
+  const effect = model?.effect;
   if (!effect?.compose) throw new Error(`model ${job.modelId} has no compose config`);
   if (!deps.composer) throw new Error('compose is not configured for this site');
+  // A job created under an older effect config (for example before its shots were merged into one) rendered segments the current
+  // config no longer lists: composing would silently use base clips for them and deliver the original footage. Fail with a refund instead.
+  const known = new Set(effect.segments.map((segment) => segment.id));
+  const stale = partsOf(job, model!)
+    .filter((part) => part.kind !== 'image' && !known.has(part.id))
+    .map((part) => part.id);
+  if (stale.length > 0) throw new Error(`segments ${stale.join(', ')} are no longer in the effect config`);
   const segments: ComposeSegment[] = effect.segments.map((segment) => {
     const rendered = partKeys.get(segment.id);
+    // Shot cuts only apply to the model output; base clips already have the original timing.
     return rendered
-      ? { key: rendered, target: segment.target!, fit: segment.fit ?? 'stretch' }
+      ? {
+          key: rendered,
+          target: segment.target!,
+          fit: segment.fit ?? 'stretch',
+          ...(segment.cuts ? { cuts: segment.cuts } : {}),
+        }
       : { key: segment.base!, target: segment.target!, fit: 'stretch' };
   });
   const { audio, audioStart, audioDuration, width, height, fps } = effect.compose;

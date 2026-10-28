@@ -1,6 +1,7 @@
 // HTTP server for the compose container (runs in Cloudflare Containers; image in Dockerfile).
-// POST /compose  multipart: manifest (JSON: { id, segments: [{ target, fit }], audio: { start, duration }, width, height, fps }),
+// POST /compose  multipart: manifest (JSON: { id, segments: [{ target, fit, cuts? }], audio: { start, duration }, width, height, fps }),
 //   segment-0…segment-N (segment videos), audio (original track). Stitches, retimes and mixes, returns an MP4 with the track; results also stay in /tmp/compose/<id>/.
+//   A segment with cuts is split at the scene cuts found in its video and each shot is retimed to its length; a missing cut fails the request.
 // GET  /files/<id>/song.mp4 | /files/<id>/silent.mp4  read results.
 // POST /faces  multipart: video (model output), original (unmasked clip of the shot), seconds, points (JSON [[x, y], ...]).
 //   Returns { similarity: [...] }: per point, how closely any face in the output matches the original person there (faces.py). Read-only.
@@ -12,7 +13,15 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { buildFfmpegArgs, buildSilentArgs, parsePoints } from './compose.mjs';
+import {
+  buildCutArgs,
+  buildFfmpegArgs,
+  buildSilentArgs,
+  matchCuts,
+  parseCutTimes,
+  parsePoints,
+  splitAtCuts,
+} from './compose.mjs';
 
 const run = promisify(execFile);
 const ROOT = '/tmp/compose';
@@ -56,7 +65,19 @@ async function compose(req) {
   for (const [i, segment] of manifest.segments.entries()) {
     const file = join(dir, `in-${i}.mp4`);
     await save(form, `segment-${i}`, file);
-    segments.push({ file, duration: await durationOf(file), target: segment.target, fit: segment.fit });
+    const duration = await durationOf(file);
+    if (!Array.isArray(segment.cuts) || segment.cuts.length === 0) {
+      segments.push({ file, duration, target: segment.target, fit: segment.fit });
+      continue;
+    }
+    const cuts = segment.cuts.map(Number);
+    if (!cuts.every((cut, j) => cut > (j === 0 ? 0 : cuts[j - 1]) && cut < segment.target))
+      throw new Error('bad cuts');
+    // showinfo logs at info level; -nostats keeps progress lines out of stderr.
+    const { stderr } = await run('ffmpeg', buildCutArgs(file), { maxBuffer: 16 * 1024 * 1024 });
+    const detected = matchCuts(cuts, parseCutTimes(stderr));
+    if (!detected) throw new Error(`segment ${i}: shot cuts not found in the output`);
+    segments.push(...splitAtCuts({ file, duration, target: segment.target, cuts, detected }));
   }
   const audioFile = join(dir, 'audio-src');
   await save(form, 'audio', audioFile);

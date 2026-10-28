@@ -4,6 +4,8 @@ export interface Segment {
   duration: number;
   target: number;
   fit?: 'stretch' | 'trim';
+  start?: number;
+  ratio?: number;
 }
 export interface Audio {
   file: string;
@@ -19,4 +21,18 @@ export function buildFfmpegArgs(spec: {
   output: string;
 }): string[];
 export function buildSilentArgs(input: string, output: string): string[];
-export function parsePoints(text: string): [number, number][];
+export function parsePoints(text: string): ([number, number] | [number, number, number])[];
+export function buildCutArgs(file: string): string[];
+export function parseCutTimes(stderr: string): number[];
+export function matchCuts(
+  expected: readonly number[],
+  detected: readonly number[],
+  tolerance?: number,
+): number[] | null;
+export function splitAtCuts(input: {
+  file: string;
+  duration: number;
+  target: number;
+  cuts: readonly number[];
+  detected: readonly number[];
+}): Required<Pick<Segment, 'file' | 'start' | 'duration' | 'target' | 'ratio'>>[];

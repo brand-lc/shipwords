@@ -70,6 +70,12 @@ export interface EffectSegment {
    */
   fit?: 'stretch' | 'trim';
   /**
+   * For compose: shot cut times of this segment in the final cut (seconds, increasing, inside (0, target)). Overrides fit:
+   * compose finds the scene cuts in the model output, matches each to the nearest one within 0.5 s and retimes every shot to its exact length,
+   * for edit models that keep the shots but not the exact timing. A missing cut fails the job with a refund.
+   */
+  cuts?: readonly number[];
+  /**
    * Output check (needs effect.compose): for each filled slot listed in faces, look for the original person's face in the output.
    * If any of them is still there (face similarity ≥ maxSimilarity) the swap didn't take, so rerun this segment up to retries times;
    * still not swapped fails the whole job with a refund.
@@ -78,14 +84,19 @@ export interface EffectSegment {
 }
 
 export interface EffectCheck {
-  /** Unmasked original clip of this shot (assets/*.mp4); the original faces are read from its first frame. */
+  /** Unmasked original clip of this shot (assets/*.mp4); the original faces are read from its first frame, or from the frame at a point's t. */
   original: string;
-  /** Slot → face center in the original's first frame, as fractions of width and height. */
-  faces: Readonly<Record<string, readonly [number, number]>>;
+  /**
+   * Slot → face center as fractions of width and height, in the original's first frame ([x, y]) or at t seconds ([x, y, t]),
+   * for clips where people appear in different shots.
+   */
+  faces: Readonly<Record<string, FacePoint>>;
   /** Face similarity (cosine, 0–1) at or above which a slot still shows the original person. */
   maxSimilarity: number;
   retries: number;
 }
+
+export type FacePoint = readonly [number, number] | readonly [number, number, number];
 
 /** Every non-empty subset of a segment's slots, in slot order. */
 function slotCombinations(slots: readonly string[]): string[][] {
@@ -195,8 +206,18 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
         throw new Error(
           `model ${modelId}: segment ${segment.id} needs target and an assets/ base for compose`,
         );
+      const cuts = segment.cuts;
+      if (
+        cuts !== undefined &&
+        (cuts.length === 0 ||
+          !cuts.every(
+            (cut, i) => Number.isFinite(cut) && cut > (i === 0 ? 0 : cuts[i - 1]!) && cut < segment.target!,
+          ))
+      )
+        throw new Error(`model ${modelId}: segment ${segment.id} cuts must increase inside (0, target)`);
     }
-  }
+  } else if (effect.segments.some((segment) => segment.cuts))
+    throw new Error(`model ${modelId}: segment cuts need compose`);
   for (const segment of effect.segments) {
     const check = segment.check;
     if (!check) continue;
@@ -209,12 +230,13 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
       faces.some(
         ([slot, point]) =>
           !segment.slots.includes(slot) ||
-          point.length !== 2 ||
-          !point.every((value) => value >= 0 && value <= 1),
+          (point.length !== 2 && point.length !== 3) ||
+          !point.slice(0, 2).every((value) => value >= 0 && value <= 1) ||
+          (point.length === 3 && !(point[2]! >= 0 && point[2]! <= 60)),
       )
     )
       throw new Error(
-        `model ${modelId}: segment ${segment.id} check.faces must map this segment's slots to 0–1 points`,
+        `model ${modelId}: segment ${segment.id} check.faces must map this segment's slots to 0–1 points (and 0–60 s)`,
       );
     if (!(check.maxSimilarity > 0 && check.maxSimilarity < 1))
       throw new Error(`model ${modelId}: segment ${segment.id} check.maxSimilarity must be between 0 and 1`);

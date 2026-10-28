@@ -2,6 +2,8 @@
 // The actual ffmpeg runs in Cloudflare Containers (image in packages/jobs/compose/); this side only
 // fetches files from R2, hands them to the container and stores the results.
 
+import type { FacePoint } from './models';
+
 export interface ComposeSegment {
   /** R2 key. */
   key: string;
@@ -9,6 +11,8 @@ export interface ComposeSegment {
   target: number;
   /** stretch: retime the whole segment to target; trim: take the first target seconds at real speed. */
   fit: 'stretch' | 'trim';
+  /** Shot cut times in the final cut: the container splits at the cuts it finds and retimes each shot (overrides fit). */
+  cuts?: readonly number[];
 }
 
 export interface ComposeInput {
@@ -26,8 +30,8 @@ export interface FacesInput {
   key: string;
   /** Unmasked original clip of the shot (R2 key); original faces are read from its first frame. */
   originalKey: string;
-  /** Face centers in the original's first frame (fractions of width and height), one per slot to check. */
-  points: (readonly [number, number])[];
+  /** Face centers (fractions of width and height) in the original's first frame, or at t seconds for [x, y, t]; one per slot to check. */
+  points: FacePoint[];
   /** Only look at the first few seconds of the output. */
   seconds: number;
 }
@@ -60,7 +64,11 @@ export function containerComposer(namespace: DurableObjectNamespace, bucket: R2B
         'manifest',
         JSON.stringify({
           id: input.jobId,
-          segments: input.segments.map(({ target, fit }) => ({ target, fit })),
+          segments: input.segments.map(({ target, fit, cuts }) => ({
+            target,
+            fit,
+            ...(cuts ? { cuts } : {}),
+          })),
           audio: { start: input.audio.start, duration: input.audio.duration },
           width: input.width,
           height: input.height,
