@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ComposeInput, Composer, FacesInput } from '../src/compose';
 import { appendUpstreamJob, loadJob, markFailed, spendKey } from '../src/lifecycle';
 import { defineModels, effectParts, type ModelDefinition } from '../src/models';
-import { runGeneration, type StepRunner } from '../src/runner';
+import { PREP_HEDGE_MS, runGeneration, type StepRunner } from '../src/runner';
 import { jobs } from '../src/schema';
 import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError } from '../src/upstream';
 import { buildYirRequest } from '../src/yir';
@@ -893,7 +893,7 @@ describe('prep and reference audio', () => {
   const prepModel: ModelDefinition = {
     ...effectModel,
     id: 'demo-prep',
-    maxCost: '0.84',
+    maxCost: '0.88',
     effect: {
       slots: [
         { id: 'left', label: 'Left', required: true, prep: 'left outfit' },
@@ -968,8 +968,8 @@ describe('prep and reference audio', () => {
     ).toEqual(['right', 'group']);
   });
 
-  it('config validation: prep cost counts toward the job cap, reference audio only accepts assets/*.mp3 or https', () => {
-    expect(() => defineModels([{ ...prepModel, maxCost: '0.83' }])).toThrow(/exceeds model maxCost/);
+  it('config validation: prep cost counts twice toward the job cap (hedge copy), reference audio only accepts assets/*.mp3 or https', () => {
+    expect(() => defineModels([{ ...prepModel, maxCost: '0.87' }])).toThrow(/exceeds model maxCost/);
     expect(() =>
       defineModels([
         {
@@ -1139,5 +1139,283 @@ describe('prep and reference audio', () => {
     ]);
     expect(adapter.submits[2]!.input.references[1]!.url).toBe('https://up/left-prep.png');
     expect((await loadJob(db, jobId))?.status).toBe('succeeded');
+  });
+  describe('slow prep hedge', () => {
+    const hedgeId = (jobId: string) => `up_${jobId}:prep-left:hedge`;
+    /** Clock past PREP_HEDGE_MS after job creation from the first prep poll on. */
+    const lateClock = (adapter: FakeAdapter) => {
+      const poll = adapter.poll.bind(adapter);
+      const start = Date.now();
+      adapter.poll = async (id: string) => {
+        vi.spyOn(Date, 'now').mockReturnValue(start + PREP_HEDGE_MS + 1_000);
+        return poll(id);
+      };
+    };
+
+    it('prep still running past the hedge time: submits one copy, the first to finish is used, the other is canceled, the copy is not recorded', async () => {
+      const { userId, jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}:prep-left`, [{ state: 'running' }, { state: 'running' }]);
+      adapter.polls.set(hedgeId(jobId), [image('https://up/left-hedge.png')]);
+      finishVideo(adapter, jobId);
+      lateClock(adapter);
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits.map((s) => s.key)).toEqual([
+        `${jobId}:prep-left`,
+        `${jobId}:prep-left:hedge`,
+        `${jobId}:left`,
+        `${jobId}:group`,
+      ]);
+      expect(adapter.submits[1]!.input).toEqual(adapter.submits[0]!.input);
+      expect(adapter.submits[2]!.input.references[1]!.url).toBe('https://up/left-hedge.png');
+      expect(adapter.cancelled).toEqual([`up_${jobId}:prep-left`]);
+      expect(await loadJob(db, jobId)).toMatchObject({
+        status: 'succeeded',
+        upstreamJobId: `up_${jobId}:prep-left,up_${jobId}:left,up_${jobId}:group`,
+      });
+      expect((await getBalance(db, userId)).available).toBe(40);
+    });
+
+    it('original finishes first after hedging: original used, copy canceled; original failing waits for the copy', async () => {
+      const first = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${first.jobId}:prep-left`, [
+        { state: 'running' },
+        image('https://up/left-prep.png'),
+      ]);
+      finishVideo(adapter, first.jobId);
+      lateClock(adapter);
+      try {
+        await runGeneration(prepDeps(adapter), first.jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits[2]!.input.references[1]!.url).toBe('https://up/left-prep.png');
+      expect(adapter.cancelled).toEqual([hedgeId(first.jobId)]);
+
+      const second = await prepJob({ left: '/files/uploads/up_a.png' });
+      const other = new FakeAdapter();
+      const stuck: PollResult = { state: 'failed', code: 'YIR_EXECUTION_FAILED', message: 'stuck' };
+      other.polls.set(`up_${second.jobId}:prep-left`, [{ state: 'running' }, stuck, stuck]);
+      other.polls.set(hedgeId(second.jobId), [{ state: 'running' }, image('https://up/left-hedge.png')]);
+      finishVideo(other, second.jobId);
+      lateClock(other);
+      try {
+        await runGeneration(prepDeps(other), second.jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(other.submits[2]!.input.references[1]!.url).toBe('https://up/left-hedge.png');
+      expect((await loadJob(db, second.jobId))?.status).toBe('succeeded');
+    });
+
+    it('both copies fail: falls back to the original photo; copy submit failing keeps waiting on the original', async () => {
+      const first = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      const failed: PollResult = { state: 'failed', code: 'YIR_EXECUTION_FAILED', message: 'no' };
+      adapter.polls.set(`up_${first.jobId}:prep-left`, [{ state: 'running' }, failed]);
+      adapter.polls.set(hedgeId(first.jobId), [failed]);
+      finishVideo(adapter, first.jobId);
+      lateClock(adapter);
+      try {
+        await runGeneration(prepDeps(adapter), first.jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits[2]!.input.references[1]!.url).toBe('https://site/files/uploads/up_a.png');
+      expect((await loadJob(db, first.jobId))?.status).toBe('succeeded');
+
+      const second = await prepJob({ left: '/files/uploads/up_a.png' });
+      const other = new FakeAdapter();
+      other.submitErrors = [null, new UpstreamError('YIR_RATE_LIMITED', 'busy', false)];
+      other.polls.set(`up_${second.jobId}:prep-left`, [
+        { state: 'running' },
+        { state: 'running' },
+        image('https://up/left-prep.png'),
+      ]);
+      finishVideo(other, second.jobId);
+      lateClock(other);
+      const names: string[] = [];
+      try {
+        await runGeneration(prepDeps(other), second.jobId, durableSteps(new Map(), names));
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(names.filter((n) => n === 'hedge:prep-left')).toHaveLength(1);
+      expect(other.submits.map((s) => s.key)).toEqual([
+        `${second.jobId}:prep-left`,
+        `${second.jobId}:left`,
+        `${second.jobId}:group`,
+      ]);
+      expect(other.submits[1]!.input.references[1]!.url).toBe('https://up/left-prep.png');
+      expect((await loadJob(db, second.jobId))?.status).toBe('succeeded');
+    });
+
+    it('user cancels after the copy is placed: the next poll cancels the unrecorded copy and stops, refunded', async () => {
+      const { userId, jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}:prep-left`, [{ state: 'running' }]);
+      adapter.onSubmit = async (key) => {
+        if (key.endsWith(':hedge')) await markFailed(db, jobId, 'canceled', 'canceled', 'by user');
+      };
+      lateClock(adapter);
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.cancelled).toContain(hedgeId(jobId));
+      expect(adapter.submits.map((s) => s.key)).toEqual([`${jobId}:prep-left`, `${jobId}:prep-left:hedge`]);
+      expect((await loadJob(db, jobId))?.status).toBe('canceled');
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('timeout after the copy is placed: both copies canceled, refunded', async () => {
+      const { userId, jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}:prep-left`, [{ state: 'running' }]);
+      const start = Date.now();
+      adapter.onSubmit = async (key) => {
+        if (key.endsWith(':hedge')) vi.spyOn(Date, 'now').mockReturnValue(start + 21 * 60_000);
+      };
+      lateClock(adapter);
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.cancelled.sort()).toEqual([`up_${jobId}:prep-left`, hedgeId(jobId)].sort());
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'timeout' });
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('replay: cached prep polls are reused and never hedge, even with a late clock', async () => {
+      const { jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      finishVideo(adapter, jobId);
+      await appendUpstreamJob(db, jobId, 0, `up_${jobId}:prep-left`);
+      const cache = new Map<string, unknown>([
+        ['submit:prep-left', { upstreamJobId: `up_${jobId}:prep-left` }],
+        ['poll:prep:0', { state: 'polled', results: { 'prep-left': { state: 'running' } }, hedge: [] }],
+        [
+          'poll:prep:1',
+          { state: 'polled', results: { 'prep-left': image('https://up/left-prep.png') }, hedge: [] },
+        ],
+      ]);
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + PREP_HEDGE_MS + 1_000);
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps(cache));
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits.map((s) => s.key)).toEqual([`${jobId}:left`, `${jobId}:group`]);
+      expect(adapter.submits[0]!.input.references[1]!.url).toBe('https://up/left-prep.png');
+    });
+
+    it('replay resuming a cached hedge decision past the deadline: no copy submitted, times out and refunds', async () => {
+      const { userId, jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      await appendUpstreamJob(db, jobId, 0, `up_${jobId}:prep-left`);
+      const cache = new Map<string, unknown>([
+        ['submit:prep-left', { upstreamJobId: `up_${jobId}:prep-left` }],
+        [
+          'poll:prep:0',
+          { state: 'polled', results: { 'prep-left': { state: 'running' } }, hedge: ['prep-left'] },
+        ],
+      ]);
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 21 * 60_000);
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps(cache));
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits).toEqual([]);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'timeout' });
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('a query error on one copy does not override the other copy succeeding', async () => {
+      const { jobId } = await prepJob({ left: '/files/uploads/up_a.png' });
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}:prep-left`, [{ state: 'running' }]);
+      adapter.polls.set(hedgeId(jobId), [image('https://up/left-hedge.png')]);
+      finishVideo(adapter, jobId);
+      lateClock(adapter);
+      const poll = adapter.poll;
+      adapter.poll = async (id: string) => {
+        if (id === `up_${jobId}:prep-left` && adapter.submits.length > 1) throw new Error('status 502');
+        return poll(id);
+      };
+      try {
+        await runGeneration(prepDeps(adapter), jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits[2]!.input.references[1]!.url).toBe('https://up/left-hedge.png');
+      expect((await loadJob(db, jobId))?.status).toBe('succeeded');
+    });
+
+    it('several slow preps: each gets its copy in the same round, not after the previous prep finishes', async () => {
+      const both: ModelDefinition = {
+        ...prepModel,
+        id: 'demo-prep-both',
+        maxCost: '0.96',
+        effect: {
+          ...prepModel.effect!,
+          slots: prepModel.effect!.slots.map((slot) => ({ ...slot, prep: `${slot.id} outfit` })),
+        },
+      };
+      const userId = `u_${crypto.randomUUID().slice(0, 10)}`;
+      const jobId = `job_${crypto.randomUUID().replaceAll('-', '')}`;
+      const parts = effectParts(
+        both,
+        { left: '/files/uploads/up_a.png', right: '/files/uploads/up_b.png' },
+        upload,
+        asset,
+      )!;
+      await grantCredits(db, { userId, amount: 50, idemKey: `g:${userId}`, source: 'test' });
+      await spendCredits(db, { userId, amount: 10, idemKey: spendKey(jobId) }, [
+        db.insert(jobs).values({
+          id: jobId,
+          userId,
+          modelId: both.id,
+          kind: 'video',
+          prompt: '',
+          inputJson: JSON.stringify({ parts }),
+          costCredits: 10,
+          upstream: 'yir',
+        }),
+      ]);
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}:prep-left`, [{ state: 'running' }, { state: 'running' }]);
+      adapter.polls.set(`up_${jobId}:prep-right`, [{ state: 'running' }, { state: 'running' }]);
+      adapter.polls.set(`up_${jobId}:prep-left:hedge`, [image('https://up/left-hedge.png')]);
+      adapter.polls.set(`up_${jobId}:prep-right:hedge`, [image('https://up/right-hedge.png')]);
+      for (const id of ['left', 'right', 'group']) adapter.polls.set(`up_${jobId}:${id}`, [succeeded(id)]);
+      lateClock(adapter);
+      try {
+        await runGeneration({ ...deps(adapter), models: defineModels([both]) }, jobId, durableSteps());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(adapter.submits.map((s) => s.key)).toEqual([
+        `${jobId}:prep-left`,
+        `${jobId}:prep-right`,
+        `${jobId}:prep-left:hedge`,
+        `${jobId}:prep-right:hedge`,
+        `${jobId}:left`,
+        `${jobId}:right`,
+        `${jobId}:group`,
+      ]);
+      expect(adapter.submits[6]!.input.references.slice(1, 3).map((r) => r.url)).toEqual([
+        'https://up/left-hedge.png',
+        'https://up/right-hedge.png',
+      ]);
+      expect((await loadJob(db, jobId))?.status).toBe('succeeded');
+    });
   });
 });

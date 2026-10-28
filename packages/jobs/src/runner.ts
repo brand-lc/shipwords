@@ -38,6 +38,8 @@ export interface RunnerDeps {
 
 const POLL_WAIT_SECONDS = 20;
 const POLL_PAUSE_MS = 3_000;
+/** Prep images usually finish in about 35 s; one still running past this gets a second copy, and whichever finishes first is used. */
+export const PREP_HEDGE_MS = 60_000;
 
 function extensionFor(mediaType: string): string {
   const subtype = mediaType.split('/')[1]?.split(';')[0] ?? 'bin';
@@ -122,6 +124,45 @@ export function partsOf(job: { prompt: string; inputJson: string }, model: Model
       ...(model.maxCost ? { maxCost: model.maxCost } : {}),
     },
   ];
+}
+
+/**
+ * Poll copies of the same request: the first success wins and the other copies are canceled.
+ * Running while any copy runs; a query error is thrown only when no copy succeeded or is still running; failed once every copy failed.
+ */
+async function pollCopies(
+  adapter: UpstreamAdapter,
+  ids: readonly string[],
+  waitSeconds: number,
+): Promise<PollResult> {
+  type Outcome = { id: string; result: PollResult } | { id: string; error: unknown };
+  const outcomes = await new Promise<Outcome[]>((resolve) => {
+    const done: Outcome[] = [];
+    const settle = (outcome: Outcome) => {
+      done.push(outcome);
+      if (('result' in outcome && outcome.result.state === 'succeeded') || done.length === ids.length)
+        resolve(done);
+    };
+    for (const id of ids)
+      adapter.poll(id, waitSeconds).then(
+        (result) => settle({ id, result }),
+        (error: unknown) => settle({ id, error }),
+      );
+  });
+  const results = outcomes.flatMap((outcome) => ('result' in outcome ? [outcome] : []));
+  const won = results.find(({ result }) => result.state === 'succeeded');
+  if (won) {
+    await cancelAll(
+      adapter,
+      ids.filter((id) => id !== won.id),
+    );
+    return won.result;
+  }
+  const running = results.find(({ result }) => result.state === 'running');
+  if (running) return running.result;
+  const errored = outcomes.find((outcome) => 'error' in outcome);
+  if (errored && 'error' in errored) throw errored.error;
+  return results[0]!.result;
 }
 
 async function cancelAll(adapter: UpstreamAdapter, ids: readonly string[]) {
@@ -259,6 +300,79 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       );
       if (result.state !== 'running') return result;
       await step.sleep(label === null ? `pause:${attempt}` : `pause:${label}:${attempt}`, POLL_PAUSE_MS);
+    }
+  };
+  /**
+   * Poll every prep segment together until each finishes. A prep still running PREP_HEDGE_MS after job creation gets one copy,
+   * since one stuck image holds back every video segment; the first copy to succeed is used and the other canceled (pollCopies).
+   * Copies are not recorded in upstream_job_id (video segments haven't taken their positions yet): this loop cancels them when it sees
+   * the job stopped or timed out. A user cancel terminates the Workflow, so a copy still running then is left to finish upstream (at most one prep maxCost).
+   * Step names replaced the per-prep `poll:<prep>:<n>` of earlier versions: deploy with no effect job in flight, or a replayed job past prep re-polls its preps live.
+   */
+  type Finished = Exclude<PollResult, { state: 'running' }>;
+  const pollPreps = async (
+    pending: readonly { partId: string; index: number; upstreamJobId: string }[],
+  ): Promise<
+    { state: 'stopped' } | { state: 'timeout' } | { state: 'done'; results: Map<string, Finished> }
+  > => {
+    const results = new Map<string, Finished>();
+    const copies = new Map<string, string>();
+    const hedged = new Set<string>();
+    for (let attempt = 0; ; attempt++) {
+      const open = pending.filter((part) => !results.has(part.partId));
+      const polled = await step.do(`poll:prep:${attempt}`, async () => {
+        const job = await loadJob(deps.db, jobId);
+        const stopped = !job || TERMINAL.includes(job.status);
+        if (stopped || Date.now() > deadline) {
+          await cancelAll(adapter, [...copies.values()]);
+          return { state: stopped ? ('stopped' as const) : ('timeout' as const) };
+        }
+        const states = await Promise.all(
+          open.map((part) => {
+            const copy = copies.get(part.partId);
+            return pollCopies(
+              adapter,
+              copy ? [part.upstreamJobId, copy] : [part.upstreamJobId],
+              POLL_WAIT_SECONDS,
+            );
+          }),
+        );
+        const late = Date.now() - setup.createdAt > PREP_HEDGE_MS;
+        return {
+          state: 'polled' as const,
+          results: Object.fromEntries(open.map((part, i) => [part.partId, states[i]!])),
+          // Decided inside the step: replaying a cached poll must never hedge a prep that has since finished.
+          hedge: open
+            .filter((part, i) => late && states[i]!.state === 'running' && !hedged.has(part.partId))
+            .map((part) => part.partId),
+        };
+      });
+      if (polled.state !== 'polled') return polled;
+      for (const [partId, result] of Object.entries(polled.results))
+        if (result.state !== 'running') results.set(partId, result as Finished);
+      for (const partId of polled.hedge) {
+        hedged.add(partId);
+        const part = pending.find((candidate) => candidate.partId === partId)!;
+        // Best effort and no Workflow retries: if the copy can't be placed, keep waiting on the original.
+        const copy = await step.do(`hedge:${partId}`, async () => {
+          const job = await loadJob(deps.db, jobId);
+          // A replay can resume here past the deadline: a copy then could never be used.
+          if (!job || TERMINAL.includes(job.status) || Date.now() > deadline) return null;
+          try {
+            const { upstreamJobId } = await adapter.submit(
+              submitInput(job, part.index),
+              `${jobId}:${partId}:hedge`,
+            );
+            return upstreamJobId;
+          } catch (error) {
+            deps.log?.('prep hedge failed', { jobId, part: partId, error: String(error) });
+            return null;
+          }
+        });
+        if (copy) copies.set(partId, copy);
+      }
+      if (results.size === pending.length) return { state: 'done' as const, results };
+      if (polled.hedge.length === 0) await step.sleep(`pause:prep:${attempt}`, POLL_PAUSE_MS);
     }
   };
   /** Rerun upstream task IDs go after all segments, appended in rerun order. */
@@ -410,6 +524,23 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       submittedIds[index] = submitted.upstreamJobId;
     }
 
+    let prepResults = new Map<string, Finished>();
+    if (from === 0 && prepCount > 0) {
+      const pending = partIds
+        .slice(0, prepCount)
+        .map((partId, index) => ({ partId, index, upstreamJobId: submittedIds[index]! }))
+        .filter((part) => !part.upstreamJobId.startsWith(SKIPPED));
+      if (pending.length > 0) {
+        const polled = await pollPreps(pending);
+        if (polled.state === 'stopped') return;
+        if (polled.state === 'timeout') {
+          await timeOut();
+          return;
+        }
+        prepResults = polled.results;
+      }
+    }
+
     for (let index = from; index < to; index++) {
       const partId = partIds[index]!;
       const upstreamJobId = submittedIds[index]!;
@@ -428,7 +559,10 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
         if (!(await fallBack())) return;
         continue;
       }
-      const result = await pollUntilDone(upstreamJobId, single ? null : partId);
+      const result =
+        index < prepCount
+          ? prepResults.get(partId)!
+          : await pollUntilDone(upstreamJobId, single ? null : partId);
       if (result.state === 'stopped') return;
       if (result.state === 'failed') {
         if (index < prepCount) {

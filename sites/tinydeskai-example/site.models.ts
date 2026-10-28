@@ -77,8 +77,8 @@ export default defineModels([
     guest: false,
     allowedParameters: [],
     maxReferences: 0,
-    // 4 segments at 1.35 + one lead retry at 0.40 + 5 photo edits at 0.10.
-    maxCost: '1.85',
+    // 4 segments at 1.35 + one lead retry at 0.40 + 5 photo edits at 0.10, each possibly hedged once (another 0.10).
+    maxCost: '1.95',
     timeoutMinutes: 25,
     effect: {
       slots: [

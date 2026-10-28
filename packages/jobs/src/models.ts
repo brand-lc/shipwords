@@ -173,13 +173,13 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
   if (effect.prep && !(cents(effect.prep.maxCost) > 0))
     throw new Error(`model ${modelId}: prep needs a positive maxCost`);
   const prepCount = effect.prep ? effect.slots.filter((slot) => slot.prep).length : 0;
-  // Segments with an output check may rerun, so count them as up to 1 + retries runs.
+  // Segments with an output check may rerun, so count them as up to 1 + retries runs; a slow prep may run twice (runner PREP_HEDGE_MS).
   const total =
     effect.segments.reduce(
       (sum, segment) => sum + cents(segment.maxCost) * (1 + (segment.check?.retries ?? 0)),
       0,
     ) +
-    prepCount * (effect.prep ? cents(effect.prep.maxCost) : 0);
+    prepCount * 2 * (effect.prep ? cents(effect.prep.maxCost) : 0);
   if (effect.segments.some((segment) => !(cents(segment.maxCost) > 0)))
     throw new Error(`model ${modelId}: every segment needs a positive maxCost`);
   if (model.maxCost === undefined || total > cents(model.maxCost))
