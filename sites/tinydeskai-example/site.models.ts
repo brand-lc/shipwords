@@ -20,19 +20,24 @@ type Seat = keyof typeof WHO;
 /**
  * The prompt follows the tested run: start with Edit @video_1 (written as Reference it becomes reference-to-video), replace each person,
  * then keep motion, expressions, lip sync, camera, cuts and duration frame by frame. The engine names images @image1; Kling 4.0 wants @image_1 and Yir rejects the wrong name.
+ * The stage starts with 5 dogs, so a photo may be a person or a dog and the server cannot tell; the prompt says "person or animal".
+ * The animal sentence and "no lead singer or new character in the band shots" come from the tested dog run: without them a second lead appears and hands stay human.
+ * A mix of people and dogs in one job is untested.
  */
 function editPrompt(images: Readonly<Record<string, string>>) {
   const filled = (Object.keys(WHO) as Seat[]).filter((seat) => images[seat]);
   const swaps = filled.map(
     (seat) =>
-      `Replace ${WHO[seat]} with the person in ${images[seat]!.replace(/^@image(\d+)$/, '@image_$1')}.`,
+      `Replace ${WHO[seat]} with the person or animal in ${images[seat]!.replace(/^@image(\d+)$/, '@image_$1')}.`,
   );
   const others =
     filled.length < Object.keys(WHO).length ? ' Everyone else stays exactly as in @video_1.' : '';
   return [
     'Edit @video_1.',
     ...swaps,
-    `Each replaced person keeps the original person's position, pose, head direction, gestures, facial expressions and mouth movements frame by frame, and wears the clothes from their own photo.${others}`,
+    'The lead singer appears only in the close-up shot; the wide band shots show only the keyboard player and the two backing singers, so do not add the lead singer or any other new character to them.',
+    "A performer replaced with a dog or another animal becomes that animal completely, with its fur, face and paws; every visible hand of that performer, including raised hands, clapping hands, hands on the keyboard and hands partly outside the frame edges, becomes the animal's furry paws with no human fingers or skin.",
+    `Each replaced performer keeps the original person's position, pose, head direction, gestures, facial expressions and mouth movements frame by frame, and wears the clothes from their own photo.${others}`,
     'Keep everything else unchanged: the room, the shelves, the instruments, the microphones, the camera cuts, the camera movement, the lighting, the timing and the video duration.',
     'Keep the audio exactly identical to the original video. Do not add any new sounds.',
   ].join(' ');

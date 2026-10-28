@@ -19,8 +19,9 @@ import { openSignIn } from '~/site/sign-in';
 import site from '../../site.config';
 import models from '../../site.models';
 
-// The generator on the home page: a stage image with a round face slot on each of the 5 musicians. Click one to upload a photo; uploaded slots swap, empty ones stay.
-// At least 1 photo; same price for 1–5 people. Sign in (Google One Tap), then buy credits; no free trial. Design: DESIGN.md "Upload area".
+// The generator on the home page: a stage image with a round face slot on each of the 5 musicians. Click one to upload a photo.
+// The 5 slots start with 5 dogs (the same cast as the hero dog version; every competitor's sample is people, so dogs set us apart): click a dog to swap in your photo,
+// × on your photo puts the dog back, × on a dog keeps the original coach. At least 1 photo of your own; same price for 1–5 people. Sign in (Google One Tap), then buy credits; no free trial. Design: DESIGN.md "Upload area".
 
 const MODEL = models[0];
 const SLOTS = MODEL.effect?.slots ?? [];
@@ -58,7 +59,23 @@ const PRESETS = [
   { id: 'back', label: m.common_preset_back, slots: ['backLeft', 'backRight'] },
 ];
 
-// Photos from the phone fill empty slots in this order (highlighted preset slots first).
+// The default dogs (public/media/dogs/, the 5 from the hero dog version). The stage shows 192px face crops (*-face.jpg), about 40 KB per home page load;
+// the order swaps in the same-named half-body photo (768×1024, the model needs the clothes too).
+// The server only accepts /files/uploads/ paths from the upload API, and uploads are cleaned up after 2 days, so fixed files cannot be placed there;
+// the browser uploads the slots that are still dogs at order time.
+const DOGS: Record<string, string> = {
+  lead: '/media/dogs/lead-face.jpg',
+  sax: '/media/dogs/sax-face.jpg',
+  keys: '/media/dogs/keys-face.jpg',
+  backLeft: '/media/dogs/back-left-face.jpg',
+  backRight: '/media/dogs/back-right-face.jpg',
+};
+const isDog = (photo: string | undefined) => Boolean(photo?.startsWith('/media/dogs/'));
+/** A slot without your own photo yet: empty or still a dog. */
+const isOpen = (photo: string | undefined) => !photo || isDog(photo);
+const dogPhoto = (face: string) => face.replace(/-face\.jpg$/, '.jpg');
+
+// Photos from the phone fill open slots in this order (highlighted preset slots first); slots that are still dogs count as open.
 const FILL_ORDER = ['lead', 'sax', 'keys', 'backLeft', 'backRight'];
 
 // Drag to move: it is a drag only after the pointer moves DRAG_START px, otherwise a click to pick a photo; it drops on a slot only within DROP_REACH radii of its center.
@@ -99,8 +116,12 @@ export function TinyDeskTool({
   const auth = authClient(config.googleClientId);
   const session = auth.useSession();
   const { jobs, generate, submitting, error } = generation;
-  const [photos, setPhotos] = useState<Record<string, string>>({});
+  const [photos, setPhotos] = useState<Record<string, string>>(DOGS);
   const [uploading, setUploading] = useState<string | null>(null);
+  // While the dog photos upload before ordering, the button shows "Starting…" so it is not clicked twice.
+  const [preparing, setPreparing] = useState(false);
+  // Each dog uploads once per page; later orders reuse its path.
+  const dogUploads = useRef(new Map<string, string>());
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [consent, setConsent] = useState(false);
   const [highlight, setHighlight] = useState<string[]>([]);
@@ -177,6 +198,7 @@ export function TinyDeskTool({
   }, [rendering]);
 
   const filled = SLOTS.filter((slot) => photos[slot.id]).map((slot) => slot.id);
+  const own = filled.filter((id) => !isOpen(photos[id]));
 
   async function onPick(slotId: string, file: File | undefined, via: 'picker' | 'drop') {
     if (!file) return;
@@ -198,7 +220,7 @@ export function TinyDeskTool({
   function placeFromPhone(paths: string[]): number {
     const current = photosRef.current;
     const order = [...highlightRef.current, ...FILL_ORDER.filter((id) => !highlightRef.current.includes(id))];
-    const empty = order.filter((id) => !current[id] && SLOTS.some((slot) => slot.id === id));
+    const empty = order.filter((id) => isOpen(current[id]) && SLOTS.some((slot) => slot.id === id));
     const placed = Object.fromEntries(empty.slice(0, paths.length).map((id, i) => [id, paths[i]!]));
     const ids = Object.keys(placed);
     if (!ids.length) return 0;
@@ -301,25 +323,51 @@ export function TinyDeskTool({
   }
 
   function applyPreset(slotIds: string[]) {
-    // A preset only hints which slots to fill: highlight them and open the picker for the first empty one.
-    const empty = slotIds.filter((id) => !photos[id]);
+    // A preset only hints which slots to fill: highlight them and open the picker for the first open one (still a dog counts as open).
+    const empty = slotIds.filter((id) => isOpen(photos[id]));
     setHighlight(empty);
     if (empty[0]) inputs.current.get(empty[0])?.click();
   }
 
+  /** Replaces slots that are still dogs with upload paths; returns null on upload failure, after showing the error, so no order is placed. */
+  async function uploadDogs(current: Record<string, string>): Promise<Record<string, string> | null> {
+    const slots = { ...current };
+    for (const [slotId, photo] of Object.entries(current)) {
+      if (!isDog(photo)) continue;
+      let path = dogUploads.current.get(photo);
+      if (!path) {
+        try {
+          const blob = await (await fetch(dogPhoto(photo))).blob();
+          path = await uploadReference(new File([blob], `${slotId}.jpg`, { type: 'image/jpeg' }));
+        } catch (e) {
+          setUploadError(e instanceof Error ? e.message : m.common_tool_upload_failed());
+          return null;
+        }
+        dogUploads.current.set(photo, path);
+      }
+      slots[slotId] = path;
+    }
+    return slots;
+  }
+
   async function start() {
-    const job = await generate({ modelId: MODEL.id, slots: photos });
+    setUploadError(null);
+    setPreparing(true);
+    const slots = await uploadDogs(photosRef.current);
+    setPreparing(false);
+    if (!slots) return;
+    const job = await generate({ modelId: MODEL.id, slots });
     if (!job) return;
-    track('generate_started', { faces: filled.length, another: rendering });
+    track('generate_started', { faces: own.length, dogs: filled.length - own.length, another: rendering });
     showStarted(started.current);
   }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     // blocked records which step this click stopped at; none means generation starts.
-    const click = (blocked: string) => track('generate_click', { faces: filled.length, blocked });
-    // The button stays enabled: with no photo it opens the lead's picker, without consent it asks to tick it, rather than looking disabled.
-    if (filled.length === 0) {
+    const click = (blocked: string) => track('generate_click', { faces: own.length, blocked });
+    // The button stays enabled: with no photo of your own (all dogs or all empty) it opens the lead's picker, without consent it asks to tick it, rather than looking disabled.
+    if (own.length === 0) {
       click('no_photo');
       applyPreset(['lead']);
       return;
@@ -382,6 +430,8 @@ export function TinyDeskTool({
           const seat = SEATS[slot.id]!;
           const photo = photos[slot.id];
           const member = seat.label();
+          // × on your own photo puts this slot's dog back; × on a dog clears it and keeps the original coach.
+          const dogBack = isDog(photo) ? undefined : DOGS[slot.id];
           return (
             <div
               key={slot.id}
@@ -431,8 +481,14 @@ export function TinyDeskTool({
                 <button
                   type="button"
                   className="face-clear"
-                  aria-label={m.common_tool_keep({ member: member.toLowerCase() })}
-                  onClick={() => changePhotos(({ [slot.id]: _, ...rest }) => rest)}
+                  aria-label={
+                    dogBack ? m.common_tool_dog_back() : m.common_tool_keep({ member: member.toLowerCase() })
+                  }
+                  onClick={() =>
+                    changePhotos(({ [slot.id]: _, ...rest }) =>
+                      dogBack ? { ...rest, [slot.id]: dogBack } : rest,
+                    )
+                  }
                 >
                   ×
                 </button>
@@ -446,7 +502,7 @@ export function TinyDeskTool({
       </fieldset>
 
       <p className="desk-status mono">
-        {m.common_tool_status({ filled: filled.length, total: SLOTS.length, price: PRICE })}
+        {m.common_tool_status({ filled: own.length, total: SLOTS.length, price: PRICE })}
       </p>
       <p className="muted tips">{m.common_tool_tips()}</p>
       <PhoneHandoff place={placeFromPhone} />
@@ -465,8 +521,8 @@ export function TinyDeskTool({
       </label>
 
       <div className="hero-actions">
-        <button type="submit" className="primary" disabled={submitting}>
-          {submitting ? (
+        <button type="submit" className="primary" disabled={submitting || preparing}>
+          {submitting || preparing ? (
             m.common_tool_starting()
           ) : (
             <>

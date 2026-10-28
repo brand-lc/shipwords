@@ -15,12 +15,12 @@ import site from '../../site.config';
 const RESOLUTION = '720p';
 const BAND_PRICE = formatPrice(site.products[0]);
 
-// Samples are the base output (AI-made musicians) cut into 4 segments at the original cut points, in public/media.
+// Samples are the hero dog version (sample-dogs) cut into 4 segments at the original cut points, in public/media; the template page uses the original shot-*.mp4 cut the same way.
 const SHOTS = [
-  { time: '0:00', name: m.home_shot_band, who: m.home_shot_band_who, clip: 'shot-band' },
-  { time: '0:05', name: m.home_shot_lead, who: m.home_shot_lead_who, clip: 'shot-lead' },
-  { time: '0:12', name: m.home_shot_sax, who: m.home_shot_sax_who, clip: 'shot-sax' },
-  { time: '0:15', name: m.home_shot_band2, who: m.home_shot_band_who, clip: 'shot-band2' },
+  { time: '0:00', name: m.home_shot_band, who: m.home_shot_band_who, clip: 'shot-band-dogs' },
+  { time: '0:05', name: m.home_shot_lead, who: m.home_shot_lead_who, clip: 'shot-lead-dogs' },
+  { time: '0:12', name: m.home_shot_sax, who: m.home_shot_sax_who, clip: 'shot-sax-dogs' },
+  { time: '0:15', name: m.home_shot_band2, who: m.home_shot_band_who, clip: 'shot-band2-dogs' },
 ];
 
 // Viral wall below the hero: the first two are viral TikToks trimmed at the end of the performance (tutorial ad removed), labeled as trend references, not our usage;
@@ -265,14 +265,8 @@ const root = getRouteApi('__root__');
 function HomePage() {
   const config = root.useLoaderData();
   const generation = useGeneration({ recaptchaSiteKey: config.recaptchaSiteKey });
-  // Once the user picks a sample, the stage shows the same cast, so it is clear who replaced whom.
-  // On load the sample is the dog version but the stage keeps the original coaches: empty seats keep the coaches in the output, and a stage full of dogs would suggest they become dogs too.
+  // The hero sample and the stage show the same cast, so it is clear who replaced whom; on load both are dogs, matching the 5 dogs placed on the stage by default.
   const [heroView, setHeroView] = useState<HeroView>('dogs');
-  const [stage, setStage] = useState<HeroView>('viral');
-  const pickHero = (view: HeroView) => {
-    setHeroView(view);
-    setStage(view);
-  };
   return (
     <>
       <section className="hero" id="make">
@@ -282,9 +276,9 @@ function HomePage() {
           <h1>{m.home_hero_title()}</h1>
           <p className="lead">{m.home_hero_lead()}</p>
         </div>
-        <HeroClip view={heroView} onPick={pickHero} />
+        <HeroClip view={heroView} onPick={setHeroView} />
         <div className="hero-tool">
-          <TinyDeskTool generation={generation} stage={stage} />
+          <TinyDeskTool generation={generation} stage={heroView} />
         </div>
       </section>
 
