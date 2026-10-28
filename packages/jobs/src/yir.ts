@@ -4,23 +4,13 @@ import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError 
 
 type YirClient = ReturnType<typeof createNodeYirClient>;
 
-const NON_RETRYABLE = new Set([
-  'YIR_INVALID_REQUEST',
-  'YIR_MODEL_NOT_FOUND',
-  'YIR_INPUT_REJECTED',
-  'YIR_CONTENT_REJECTED',
-  'YIR_BUDGET_EXCEEDED',
-  'YIR_IDEMPOTENCY_CONFLICT',
-  'YIR_UNAUTHORIZED',
-  'YIR_INSUFFICIENT_BALANCE',
-  'YIR_SPEND_LIMIT_EXCEEDED',
-]);
-
+/**
+ * The SDK already retries network errors and 502/503/504 on submits and status reads, and Yir retries the task across providers,
+ * so an error that reaches us is final: retrying in the Workflow would only keep the user waiting. A rate limit (429) is the exception.
+ */
 function toUpstreamError(error: unknown): UpstreamError {
-  const e = error as { code?: string; message?: string; retryable?: boolean; status?: number };
-  const code = e?.code ?? 'yir_error';
-  const retryable = NON_RETRYABLE.has(code) ? false : (e?.retryable ?? (e?.status ? e.status >= 500 : true));
-  return new UpstreamError(code, e?.message ?? String(error), retryable);
+  const e = error as { code?: string; message?: string; status?: number };
+  return new UpstreamError(e?.code ?? 'yir_error', e?.message ?? String(error), e?.status === 429);
 }
 
 export function buildYirRequest(

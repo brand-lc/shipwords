@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { loadJob, markFailed, markSucceeded, spendKey } from '../src/lifecycle';
 import { defineModels } from '../src/models';
-import { emailOnSuccess } from '../src/notify';
+import { emailOnFinish } from '../src/notify';
 import { runGeneration, type StepRunner } from '../src/runner';
 import { jobs } from '../src/schema';
 import { type PollResult, type SubmitInput, type UpstreamAdapter, UpstreamError } from '../src/upstream';
@@ -124,7 +124,7 @@ describe('generation jobs', () => {
         return { messageId: 'm1' };
       },
     } as unknown as SendEmail;
-    const notify = emailOnSuccess({
+    const notify = emailOnFinish({
       db,
       email,
       from: 'noreply@example.com',
@@ -142,7 +142,7 @@ describe('generation jobs', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('notification failure does not affect the job; failed jobs are not notified', async () => {
+  it('notification failure does not affect the job; canceled jobs are not notified', async () => {
     const { jobId } = await paidJob();
     const adapter = new FakeAdapter();
     adapter.polls = [{ state: 'succeeded', files: [{ url: 'https://up/x.png', mediaType: 'image/png' }] }];
@@ -161,21 +161,54 @@ describe('generation jobs', () => {
     expect(steps).not.toContain('abort');
     expect((await loadJob(db, jobId))?.status).toBe('succeeded');
 
-    const failed = await paidJob();
-    const rejecting = new FakeAdapter();
-    rejecting.polls = [{ state: 'failed', code: 'X', message: 'nope' }];
+    const canceled = await paidJob();
+    await markFailed(db, canceled.jobId, 'canceled', 'canceled', 'by user');
     let calls = 0;
     await runGeneration(
       {
-        ...deps(rejecting),
+        ...deps(new FakeAdapter()),
         notify: async () => {
           calls++;
         },
       },
-      failed.jobId,
+      canceled.jobId,
       immediateSteps(),
     );
     expect(calls).toBe(0);
+  });
+
+  it('failed jobs email the user after the refund settled, saying nothing was charged', async () => {
+    const { userId, jobId } = await paidJob();
+    await db.insert(user).values({ id: userId, name: 'U', email: `${userId}@example.com` });
+    const sent: { to: string; subject: string; text: string }[] = [];
+    let balanceAtSend = -1;
+    const email = {
+      send: async (message: { to: string; subject: string; text: string }) => {
+        balanceAtSend = (await getBalance(db, userId)).available;
+        sent.push(message);
+        return { messageId: 'm1' };
+      },
+    } as unknown as SendEmail;
+    const notify = emailOnFinish({
+      db,
+      email,
+      from: 'noreply@example.com',
+      site: { name: 'Demo' },
+      baseURL: 'https://demo.test',
+    });
+    const adapter = new FakeAdapter();
+    adapter.polls = [{ state: 'failed', code: 'YIR_EXECUTION_FAILED', message: 'provider down' }];
+    const steps: string[] = [];
+    await runGeneration({ ...deps(adapter), notify }, jobId, immediateSteps(steps));
+    expect(steps.slice(-2)).toEqual(['settle', 'notify']);
+    expect(balanceAtSend).toBe(50);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      to: `${userId}@example.com`,
+      subject: "Your Demo image couldn't be made",
+    });
+    expect(sent[0]!.text).toContain('the 10 credits for it are back in your account');
+    expect(sent[0]!.text).toContain('https://demo.test/');
   });
 
   it('upstream fails: marked failed and refunded, repeated settlement refunds once', async () => {
@@ -202,7 +235,7 @@ describe('generation jobs', () => {
   it('still failing after retries: fallback marks failed and refunds', async () => {
     const { userId, jobId } = await paidJob();
     const adapter = new FakeAdapter();
-    adapter.submitError = new UpstreamError('YIR_TEMPORARILY_UNAVAILABLE', 'busy', true);
+    adapter.submitError = new UpstreamError('YIR_RATE_LIMITED', 'slow down', true);
     await runGeneration(deps(adapter), jobId, immediateSteps());
     expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'internal_error' });
     expect((await getBalance(db, userId)).available).toBe(50);
@@ -321,6 +354,53 @@ describe('Yir not configured', () => {
     await runGeneration({ ...deps(new FakeAdapter()), adapters: { yir: adapter } }, jobId, immediateSteps());
     expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'yir_not_configured' });
     expect((await getBalance(db, userId)).available).toBe(50);
+  });
+});
+
+describe('Yir errors', () => {
+  const input = { upstreamModel: 'm', kind: 'image' as const, prompt: 'p', references: [], parameters: {} };
+  const rejecting = (error: unknown) => {
+    let calls = 0;
+    const client = {
+      submitImage: async () => {
+        calls++;
+        throw error;
+      },
+    };
+    return { adapter: new YirAdapter({ apiKey: 'k' }, client as never), calls: () => calls };
+  };
+
+  it('a submit error Yir already retried fails the job at once with a refund, no second submit', async () => {
+    const { userId, jobId } = await paidJob();
+    const { adapter, calls } = rejecting({
+      status: 503,
+      code: 'YIR_UPSTREAM_UNAVAILABLE',
+      retryable: true,
+      message: 'busy',
+    });
+    const steps: string[] = [];
+    await runGeneration(
+      { ...deps(new FakeAdapter()), adapters: { yir: adapter } },
+      jobId,
+      immediateSteps(steps),
+    );
+    expect(calls()).toBe(1);
+    expect(steps).not.toContain('abort');
+    expect(await loadJob(db, jobId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'YIR_UPSTREAM_UNAVAILABLE',
+    });
+    expect((await getBalance(db, userId)).available).toBe(50);
+  });
+
+  it('only a rate limit stays retryable; network errors are final', async () => {
+    await expect(
+      rejecting({ status: 429, code: 'YIR_RATE_LIMITED', message: 'slow' }).adapter.submit(input, 'k1'),
+    ).rejects.toMatchObject({ code: 'YIR_RATE_LIMITED', retryable: true });
+    await expect(rejecting(new TypeError('fetch failed')).adapter.submit(input, 'k2')).rejects.toMatchObject({
+      code: 'yir_error',
+      retryable: false,
+    });
   });
 });
 

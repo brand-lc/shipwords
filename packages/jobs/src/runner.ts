@@ -31,7 +31,7 @@ export interface RunnerDeps {
   /** Effect compose (effect.compose); empty when the site binds no container, and jobs that need compose fail with a refund. */
   composer?: Composer;
   fetcher?: typeof fetch;
-  /** Notify the user on success (e.g. email) so they don't have to wait on the page; failures are only logged and don't affect the job. */
+  /** Notify the user when the job succeeds or fails (e.g. email) so they don't have to wait on the page; errors are only logged and don't affect the job. */
   notify?: (job: JobRow) => Promise<void>;
   log?: (message: string, details: Record<string, unknown>) => void;
 }
@@ -94,6 +94,17 @@ export async function runGeneration(deps: RunnerDeps, jobId: string, step: StepR
     if (job) await settleFailure(deps.db, job);
     return true;
   });
+  if (!deps.notify) return;
+  const notify = deps.notify;
+  // After settle, so a failure email can say the credits are back. Best-effort: if it still fails after retries, only log it.
+  await step
+    .do('notify', async () => {
+      const job = await loadJob(deps.db, jobId);
+      // Canceled jobs aren't notified: the user did it themselves.
+      if (job?.status === 'succeeded' || job?.status === 'failed') await notify(job);
+      return true;
+    })
+    .catch((error: unknown) => deps.log?.('notify failed', { jobId, error: String(error) }));
 }
 
 interface SegmentCheck {
@@ -610,17 +621,6 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     await markSucceeded(deps.db, jobId, finalOutputs);
     return true;
   });
-  if (!deps.notify) return;
-  const notify = deps.notify;
-  // Notification is best-effort: if it still fails after retries, only log it; it must not hit runGeneration's fallback failure path.
-  await step
-    .do('notify', async () => {
-      const job = await loadJob(deps.db, jobId);
-      // Only notify truly succeeded jobs: the user may have canceled before finish.
-      if (job?.status === 'succeeded') await notify(job);
-      return true;
-    })
-    .catch((error: unknown) => deps.log?.('notify failed', { jobId, error: String(error) }));
 }
 
 /** Stitch the output in effect segment order: rendered segments use model outputs, the rest use base clips. Stored as a with-track and a silent file. */

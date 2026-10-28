@@ -5,7 +5,7 @@ import { containerComposer } from './compose';
 import { markFailed } from './lifecycle';
 import { MockAdapter, mockComposer, mockMode } from './mock';
 import type { ModelDefinition } from './models';
-import { emailOnSuccess } from './notify';
+import { emailOnFinish } from './notify';
 import { runGeneration } from './runner';
 import type { UpstreamAdapter } from './upstream';
 import { YirAdapter } from './yir';
@@ -20,7 +20,7 @@ export interface JobsEnv {
   YIR_REFERRAL_CODE?: string;
   /** Effect compose container (Durable Object binding of the Container class); sites without effect compose don't need it. */
   COMPOSE?: DurableObjectNamespace;
-  /** For success notifications; shares the send_email binding and sender address with sign-in codes. */
+  /** For job-finished emails; shares the send_email binding and sender address with sign-in codes. */
   EMAIL?: SendEmail;
   EMAIL_FROM?: string;
   APP_URL?: string;
@@ -61,7 +61,7 @@ const STEP_RETRIES = { retries: { limit: 5, delay: '10 seconds', backoff: 'expon
 
 /**
  * Sites export it from the Worker entry: export const GenerationWorkflow = defineGenerationWorkflow(models, site);
- * When site is passed and EMAIL is bound, signed-in users get an email when a job succeeds.
+ * When site is passed and EMAIL is bound, signed-in users get an email when a job succeeds or fails.
  * workflows[].class_name in wrangler.jsonc must use the same name.
  */
 export function defineGenerationWorkflow(models: readonly ModelDefinition[], site?: SiteConfig) {
@@ -83,7 +83,7 @@ export function defineGenerationWorkflow(models: readonly ModelDefinition[], sit
                 : {}),
             ...(site && env.EMAIL && env.EMAIL_FROM
               ? {
-                  notify: emailOnSuccess({
+                  notify: emailOnFinish({
                     db,
                     email: env.EMAIL,
                     from: env.EMAIL_FROM,
