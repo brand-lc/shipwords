@@ -21,11 +21,11 @@ shipwords 是一套免费、MIT 开源的新词站群框架，用来在 Cloudfla
 
 **为新词站群而生。** 每个新词上一个站，起量的继续迭代，没起来的放着不管。公共核心有 bug，修一处，所有站下次部署就能更新。每个站单独部署，有自己的数据库、文件存储和收款账户，上线或下线一个站都不影响其他站。
 
-**内置成熟的 AI 能力。** [tinydeskai.io](https://tinydeskai.io/) 就是用 shipwords 做的，完整源码在 [`sites/tinydeskai-example`](sites/tinydeskai-example)，fork 过来就能用。
+**内置成熟的 AI 能力。** [tinydeskai.io](https://tinydeskai.io/) 就是用 shipwords 做的，完整源码在 [`sites/tinydeskai-example`](sites/tinydeskai-example)，可以 fork 来做你自己的词。
 
-- **视频模板**：把一条爆款视频做成模板，访客上传照片，就能拿到同款视频。Tiny Desk 是第一个。
+- **视频模板**：把一条爆款视频做成模板，访客上传照片，就能拿到同款视频。Tiny Desk AI 就是这样做的。
 - **成熟的换脸**：整段视频一次换完。每张上传的照片替换一位表演者，脸、发型和衣服都换上，口型仍然跟着节拍。原来的脸还在的话，任务判为失败，积分退回。
-- **主流模型，内置可用**：GPT Image、Nano Banana、Seedream、FLUX、Seedance、Veo、Kling、Wan 等，开箱即用。
+- **主流模型，内置可用**：GPT Image、Nano Banana、Seedream、FLUX、Seedance、Veo、Kling、Wan 等，填一个 Yir API key 就能用，按次付费。
 
 **开箱就能收钱。** 每个站都自带：
 
@@ -106,7 +106,7 @@ Agent 会克隆仓库、生成站点并在本地跑起来。它遵守的规则�
 | `packages/jobs`            | 基于 Workflows 的生成任务运行时：单向任务状态机、自动退款、上游适配接口、Yir 适配（`@yir-ai/sdk`）、本地开发用的模拟上游、可选的 ffmpeg 拼接容器                        |
 | `templates/ai-site`        | 一个完整可用的 AI 图像站，由 `pnpm new-site` 复制：首页、定价、账户、登录、政策页、`sitemap.xml`、`robots.txt`、`llms.txt`                                              |
 | `sites/<site>`             | 你的站，一个关键词一个，各自单独部署                                                                                                                                    |
-| `sites/tinydeskai-example` | tinydeskai.io 的完整源码（视频特效：照片槽位、整段一次编辑、结果检查、ffmpeg 拼接、内容页）                                                                                         |
+| `sites/tinydeskai-example` | tinydeskai.io 的完整源码（视频特效：照片槽位、整段一次编辑、结果检查、ffmpeg 拼接、内容页）                                                                             |
 | `apps/<sidecar>`           | 可选的小型 Worker，不属于任何单个站                                                                                                                                     |
 | `tools/`                   | `new-site` 脚手架、`check-site` 上线检查、`list-sites`、worktree 初始化、dev 端口、Stripe webhook 转发（只用 Node 内置模块，带测试）                                    |
 | `docs/`                    | 架构、本地开发、上线手册（英文）                                                                                                                                        |

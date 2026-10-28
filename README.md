@@ -23,9 +23,9 @@ shipwords is a free, MIT-licensed framework for running a fleet of new-keyword A
 
 **Proven AI, built in.** [tinydeskai.io](https://tinydeskai.io/) is built on shipwords, and its full source is in [`sites/tinydeskai-example`](sites/tinydeskai-example), ready to fork.
 
-- **Video templates**: turn a viral clip into a template; visitors upload photos and get the same video back. Tiny Desk is the first one.
+- **Video templates**: turn a viral clip into a template; visitors upload photos and get the same video back. That's how Tiny Desk AI works.
 - **Face swap that holds up**: the whole clip in one pass. Each uploaded photo replaces a performer, face, hair and clothes, with mouths still on the beat. If an original face is still there, the job fails and the credits come back.
-- **The popular models, built in**: GPT Image, Nano Banana, Seedream, FLUX, Seedance, Veo, Kling, Wan and more, ready to use.
+- **The popular models, built in**: GPT Image, Nano Banana, Seedream, FLUX, Seedance, Veo, Kling, Wan and more, behind one Yir API key, paid per generation.
 
 **Takes money out of the box.** Every site comes with:
 
@@ -106,7 +106,7 @@ The code is free under MIT, including commercial use. What you pay for:
 | `packages/jobs`            | Workflow-based generation runtime with a one-way job state machine and automatic refunds, upstream adapter interface, Yir adapter (`@yir-ai/sdk`), mock upstream for local dev, optional ffmpeg compose container        |
 | `templates/ai-site`        | A complete, working AI image site copied by `pnpm new-site`: home, pricing, account, login, policy pages, `sitemap.xml`, `robots.txt`, `llms.txt`                                                                        |
 | `sites/<site>`             | Your sites, one per keyword, each deployed on its own                                                                                                                                                                    |
-| `sites/tinydeskai-example` | The full source of tinydeskai.io (video effect: photo slots, one-pass video edit, output check, ffmpeg compose, content pages)                                                                                                        |
+| `sites/tinydeskai-example` | The full source of tinydeskai.io (video effect: photo slots, one-pass video edit, output check, ffmpeg compose, content pages)                                                                                           |
 | `apps/<sidecar>`           | Optional small Workers that belong to no single site                                                                                                                                                                     |
 | `tools/`                   | `new-site` scaffolder, `check-site` launch checks, `list-sites`, worktree setup, dev-port, Stripe webhook forwarding (Node built-ins only, with tests)                                                                   |
 | `docs/`                    | Architecture, local development, launch handbook                                                                                                                                                                         |
