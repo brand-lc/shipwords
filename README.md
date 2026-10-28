@@ -2,28 +2,29 @@
 
 <a href="https://shipwords.dev/"><img src="apps/www/public/img/og.jpg" alt="shipwords: One keyword. One site." width="100%"></a>
 
-**One keyword. One site. Taking payments the day it launches.**
+**An open-source framework for new-keyword site fleets: a new site in an afternoon, taking payments the day it launches.**
 
 [![CI](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml/badge.svg)](https://github.com/shipwords-dev/shipwords/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![TanStack Start](https://img.shields.io/badge/TanStack-Start-FF4154?logo=reactquery&logoColor=white)](https://tanstack.com/start)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![GitHub stars](https://img.shields.io/github/stars/shipwords-dev/shipwords?style=flat&logo=github)](https://github.com/shipwords-dev/shipwords/stargazers)
 
 **English** · [中文](README.zh-CN.md)
 
 </div>
 
-shipwords is a free, MIT-licensed starter for running a fleet of AI image and video sites, one per keyword, on Cloudflare. Accounts, payments, credits and AI generation are written once and shared; each site has its own pages, look and domain. Website: [shipwords.dev](https://shipwords.dev/).
+shipwords is a free, MIT-licensed framework for running a fleet of new-keyword AI image and video sites on Cloudflare, one site per keyword. What stays the same is shared: accounts, payments, credits and AI generation are written once. What changes is each site's own: pages, look and domain. Website: [shipwords.dev](https://shipwords.dev/).
 
 ## Why shipwords
 
-**Built for a fleet of keyword sites.** Put up a site for every new keyword, leave the ones that don't take off, keep improving the ones that do. Fix a bug in the shared core once, and every site can take the update on its next deploy. Each site deploys on its own, with its own database, storage and payment account, so launching or retiring one never touches the others.
+**Built for a fleet of new-keyword sites.** Put up a site for every new keyword, keep improving the ones that take off, and leave the rest alone. Fix a bug in the shared core once, and every site can take the update on its next deploy. Each site deploys on its own, with its own database, storage and payment account, so launching or retiring one never touches the others.
 
 **Proven AI, built in.** [tinydeskai.io](https://tinydeskai.io/) is built on shipwords, and its full source is in [`sites/tinydeskai-example`](sites/tinydeskai-example), ready to fork.
 
 - **Video templates**: turn a viral clip into a template; visitors upload photos and get the same video back. Tiny Desk is the first one.
-- **Face swap that holds up**: outfits matched, lips synced to the song, and any shot where the face didn't change is redone automatically.
+- **Face swap that holds up**: the whole clip in one pass. Each uploaded photo replaces a performer, face, hair and clothes, with mouths still on the beat. If an original face is still there, the job fails and the credits come back.
 - **The popular models, built in**: GPT Image, Nano Banana, Seedream, FLUX, Seedance, Veo, Kling, Wan and more, ready to use.
 
 **Takes money out of the box.** Every site comes with:
@@ -105,7 +106,7 @@ The code is free under MIT, including commercial use. What you pay for:
 | `packages/jobs`            | Workflow-based generation runtime with a one-way job state machine and automatic refunds, upstream adapter interface, Yir adapter (`@yir-ai/sdk`), mock upstream for local dev, optional ffmpeg compose container        |
 | `templates/ai-site`        | A complete, working AI image site copied by `pnpm new-site`: home, pricing, account, login, policy pages, `sitemap.xml`, `robots.txt`, `llms.txt`                                                                        |
 | `sites/<site>`             | Your sites, one per keyword, each deployed on its own                                                                                                                                                                    |
-| `sites/tinydeskai-example` | The full source of tinydeskai.io (video effect: photo slots, multi-shot rendering, ffmpeg compose, content pages)                                                                                                        |
+| `sites/tinydeskai-example` | The full source of tinydeskai.io (video effect: photo slots, one-pass video edit, output check, ffmpeg compose, content pages)                                                                                                        |
 | `apps/<sidecar>`           | Optional small Workers that belong to no single site                                                                                                                                                                     |
 | `tools/`                   | `new-site` scaffolder, `check-site` launch checks, `list-sites`, worktree setup, dev-port, Stripe webhook forwarding (Node built-ins only, with tests)                                                                   |
 | `docs/`                    | Architecture, local development, launch handbook                                                                                                                                                                         |
