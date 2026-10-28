@@ -1,0 +1,33 @@
+{
+  "name": "@shipwords/jobs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "@shipwords/core": "workspace:*",
+    "@yir-ai/sdk": "0.12.0",
+    "drizzle-orm": "0.45.4"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.8",
+    "@cloudflare/workers-types": "5.20261027.1",
+    "drizzle-kit": "0.31.11",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12",
+    "wrangler": "4.153.0",
+    "react": "19.3.1",
+    "@types/react": "19.3.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

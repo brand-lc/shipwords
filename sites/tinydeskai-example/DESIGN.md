@@ -1,0 +1,26 @@
+# Tiny Desk AI design direction
+
+- **Audience**: people coming from the TikTok "Outstanding" meme who want to put a coach, a rival team, a favorite player, friends or themselves at the desk, then post the clip to TikTok and group chats. Not NPR Tiny Desk listeners, so nothing quiet or arty.
+- **Mood**: live footage first, with a bit of gig-poster playfulness. Real frames are the hero and text only explains them; warm, not cold or techy.
+- **Fonts**: headings Fraunces (heavy serif); short poster labels (crew names, section tags, ticket stubs) Anton, uppercase, never for sentences or the H1; body Instrument Sans; hard numbers (price, duration, seats) JetBrains Mono.
+- **Colors**: stage black `#0f0c0a`, panel `#1a1511`; cream text `#efe7da`; stage-light amber `#f2a33a` for primary buttons and emphasis; record red `#e5483a` only for small accents like `● REC`; poster paper `#efe6d2` with ink `#1d1712`. Dividers are cream at 12% opacity.
+- **Texture**: a faint film grain on dark sections; sample clips are muted, autoplay, loop, `object-fit: cover`, 14px radius; dark and poster-paper sections alternate with generous spacing.
+- **Home first screen**: left, a `● REC` tag, a large serif H1, one subtitle and the generator (stage photo); right, a 9:16 sample card with a two-option pill above it, "The viral original / Made here" (selected one amber): it defaults to the top viral TikTok and can switch to a real all-five-swapped output (AI-generated faces, said under the card). Both share one player, and the sound toggle survives the switch. The card has a crew tag, a one-line hook and a mono stat or how it was made. On mobile: title, sample, generator. The generate button is always enabled: with no photo it opens the lead's file picker; without the consent box ticked it highlights the box. Below: a wall of three vertical sample cards, then a row of the four shots (band, lead laughing, sax, band finale), each labelled with its timestamp and who is swapped.
+- **Avoid**: NPR branding in the site's own identity (logo, red and black, Tiny Desk wordmark); blue primary buttons, purple gradients and glassmorphism; neon yellow on black and all-caps outlined headlines; the template's light grey background.
+
+## Components
+
+- **Sample card (first screen)**: 9:16, no rotation or white border, thin outline and a large shadow. Anton crew tag top left, a mono strip at the bottom: `sample · AI cast · about 18 s · 720p`.
+- **Shot strip**: four small vertical samples side by side (horizontal scroll on mobile), each with a mono timestamp, shot name and who is swapped.
+- **Upload stage**: no vertical upload boxes. No single frame shows all five musicians, so the stage is a three-frame collage `public/media/stage.jpg`: band wide shot on the left (back left, back right, keys), lead close-up top right, sax bottom right. Each face gets a dashed amber ring slot with a small "+" badge; slot coordinates are `SEATS` in `tool.tsx` and must be re-measured if the image changes. The stage follows the hero switch: on "Made here" it fades in `stage-ours.jpg` (same moments and crop from the output, same slot coordinates), layered above and preloaded so only the opacity changes.
+  - Tap a musician to upload their photo; the face then sits on that musician with a small × to restore them. Swapped faces can be dragged to another seat (an empty seat moves it, a filled seat swaps them; the target grows and gets a cream and amber ring; dropping outside cancels). On desktop an image file can be dropped straight onto a musician. Names are short mono labels (Lead, Sax, Keys, Back left, Back right).
+  - Under the stage, one amber mono status line that updates live: `swapped 2/5 · 3 shots to render · $8.99`.
+  - Above the stage, three presets (Just me on lead / Whole band / Back row only) that highlight seats and open the first empty one; nothing is forced.
+  - Below the stage, a note that untouched seats keep the AI musicians, a consent box (rights to the photos, everyone 18+, it's a parody), and the price on the button.
+  - Mobile works the same way, with a minimum face size and short names so labels don't overlap.
+- **Generating**: three steps of copy (`Setting the stage` → `Swapping in your lead` → `Final mix`) with an estimated wait in mono. No fake percentages.
+- **Result**: two download buttons (with the song, silent) and a line: if TikTok mutes it, post the silent version and add "Outstanding" from the sound library.
+- **Pricing cards**: three tiers side by side, the featured one with an amber outline and an Anton tag. Below, "Before you pay": the AI result looks like the person but not identical; failures refund credits automatically; one-time payment, no subscription.
+- **Sample captions**: "Made from an AI-generated photo" or "Reference clip, not a live result".
+- **Crew line-up**: not equal-sized cards but a gig-poster line-up: one crew per row, big Anton name (amber on odd rows), a one-line description on the right, thin dividers.
+- **Content pages** (tutorial, template, guides): long poster-paper cards, `#efe6d2` with a faint halftone, ink text, serif headings, Anton tags, mono tables.

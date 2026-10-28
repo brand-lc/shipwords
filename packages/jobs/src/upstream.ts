@@ -1,0 +1,44 @@
+// Upstream adapter: only submits, queries and cancels; never touches the database or credits.
+// Another upstream (e.g. any async task API) just implements this interface.
+
+export interface SubmitInput {
+  upstreamModel: string;
+  kind: 'image' | 'video';
+  prompt: string;
+  /** Reference images: public HTTPS URLs. */
+  references: { url: string; role: string }[];
+  parameters: Record<string, unknown>;
+  /** Cost cap per task (USD string); unlimited if unset. */
+  maxCost?: string;
+}
+
+export interface OutputFile {
+  url: string;
+  mediaType: string;
+}
+
+export type PollResult =
+  | { state: 'running' }
+  | { state: 'succeeded'; files: OutputFile[] }
+  | { state: 'failed'; code: string; message: string };
+
+export class UpstreamError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    /** false means retrying won't help (bad parameters, content rejected, etc.); fail immediately. */
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'UpstreamError';
+  }
+}
+
+export interface UpstreamAdapter {
+  readonly name: string;
+  /** Repeated submits with the same idempotencyKey must return the same upstream task. */
+  submit(input: SubmitInput, idempotencyKey: string): Promise<{ upstreamJobId: string }>;
+  /** Long poll: waits up to waitSeconds, returns immediately on a state change or completion. */
+  poll(upstreamJobId: string, waitSeconds: number): Promise<PollResult>;
+  cancel(upstreamJobId: string): Promise<void>;
+}

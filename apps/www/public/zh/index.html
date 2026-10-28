@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>shipwords：每个新关键词，上线一个能收钱的 AI 站</title>
+    <meta
+      name="description"
+      content="新词站群的开源建站模板：核心共用，一个下午上一个站，内置 AI 生图和生视频，账户和收款上线当天就能用。"
+    />
+    <link rel="canonical" href="https://shipwords.dev/zh/" />
+    <link rel="alternate" hreflang="en" href="https://shipwords.dev/" />
+    <link rel="alternate" hreflang="zh-Hans" href="https://shipwords.dev/zh/" />
+    <link rel="alternate" hreflang="x-default" href="https://shipwords.dev/" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="color-scheme" content="light" />
+    <meta property="og:title" content="shipwords" />
+    <meta property="og:description" content="每个新关键词，上线一个能收钱的 AI 站。" />
+    <meta property="og:url" content="https://shipwords.dev/zh/" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://shipwords.dev/img/og-zh.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="shipwords：一个关键词，一个站。" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <link rel="preload" as="image" href="/img/hero.webp" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "shipwords",
+        "description": "每个新关键词，上线一个能收钱的 AI 站。",
+        "url": "https://shipwords.dev/zh/",
+        "inLanguage": "zh-Hans",
+        "codeRepository": "https://github.com/shipwords-dev/shipwords",
+        "license": "https://opensource.org/licenses/MIT",
+        "programmingLanguage": "TypeScript"
+      }
+    </script>
+    <link rel="stylesheet" href="/site.css" />
+    <script src="/analytics.js" async></script>
+  </head>
+  <body>
+    <div class="bar" id="bar" inert>
+      <div class="wrap">
+        <!-- biome-ignore lint/a11y/useAnchorContent: aria-label names the link; the wordmark is drawn in CSS -->
+        <a class="brand" href="#top" aria-label="shipwords"><span class="wordmark"></span></a>
+        <nav>
+          <a class="hide-sm" href="#fleet">站群</a>
+          <a class="hide-sm" href="#case">案例</a>
+          <a class="hide-sm" href="#inside">功能</a>
+          <a class="hide-sm" href="#start">快速开始</a>
+        </nav>
+        <div class="bar-end">
+          <a class="lang" href="/" hreflang="en" lang="en">English</a>
+          <a class="btn sm" href="https://github.com/shipwords-dev/shipwords">在 GitHub 克隆</a>
+        </div>
+      </div>
+    </div>
+
+    <header class="hero" id="top">
+      <div class="hero-card">
+        <img
+          src="/img/hero.webp"
+          alt="青山与粉色云朵下的湖面上漂着一艘橙帆小船，草地上放着一台打开的笔记本电脑"
+          width="2048"
+          height="1152"
+          fetchpriority="high"
+        />
+        <video class="hero-video" muted loop playsinline aria-hidden="true" data-src="/img/hero.mp4"></video>
+        <div class="hero-nav">
+          <!-- biome-ignore lint/a11y/useAnchorContent: aria-label names the link; the wordmark is drawn in CSS -->
+          <a class="brand" href="/zh/" aria-label="shipwords"><span class="wordmark"></span></a>
+          <nav>
+            <a class="hide-sm" href="#fleet">站群</a>
+            <a class="hide-sm" href="#case">案例</a>
+            <a class="hide-sm" href="#inside">功能</a>
+            <a class="hide-sm" href="#start">快速开始</a>
+            <a href="https://github.com/shipwords-dev/shipwords">GitHub</a>
+          </nav>
+          <a class="lang" href="/" hreflang="en" lang="en">English</a>
+        </div>
+        <div class="hero-body">
+          <h1>一个关键词，一个站</h1>
+          <p class="sub">新词站群的开源模板：公共部分共用，一个下午上一个站，上线当天就能收钱</p>
+          <div class="prompt">
+            <div class="cmd" data-copy="阅读 https://shipwords.dev/llms.txt，帮我为「{kw}」做一个站。">
+              <span class="p">&gt; </span>阅读 shipwords.dev/llms.txt，帮我为<span class="q">「<input id="kw" value="tiny desk ai" size="12" aria-label="你的关键词" spellcheck="false" autocomplete="off" />」</span>做一个站
+            </div>
+            <button type="button" id="copy-hero" title="复制提示词" aria-label="复制提示词" data-fail="复制被拦截，请手动选中提示词复制">
+              <svg class="ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" /><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15" /></svg>
+              <svg class="ic-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+            </button>
+          </div>
+          <p class="prompt-hint">换成你的关键词，复制后粘贴到 Claude Code、Codex 或 Cursor</p>
+          <div class="hero-ctas">
+            <a class="btn light" href="https://github.com/shipwords-dev/shipwords">在 GitHub 克隆</a>
+            <a class="text-link" href="#case">或先看一个用它做的真实站点</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="rows" id="fleet">
+        <div class="wrap">
+          <div class="row">
+            <div>
+              <h2>为新词站群而生</h2>
+              <p>核心共用，业务各自独立。每个新词上一个站，没跑出来的放着不管，跑出来的继续迭代。公共部分有 bug，修一处，所有站都能更新。</p>
+            </div>
+            <div class="stage sky-b fleet" aria-hidden="true">
+              <div class="fleet-sites">
+                <div class="fsite up"><b>tinydeskai.io</b><span>跑出来了 · 继续迭代</span></div>
+                <div class="fsite new"><b>pet portrait ai</b><span>今天刚上线</span></div>
+                <div class="fsite idle"><b>ghibli photo</b><span>没跑出来 · 放着不管</span></div>
+                <div class="fsite idle"><b>ai baby generator</b><span>没跑出来 · 放着不管</span></div>
+              </div>
+              <div class="fleet-core"><b>公共核心</b><span>账户 · 支付 · 积分 · AI 生成 · SEO</span><small>修一处，所有站都能更新</small></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="case" id="case">
+        <div class="wrap">
+          <div class="compare">
+            <figure class="clip">
+              <div class="clip-frame">
+                <video muted loop playsinline preload="none" poster="https://tinydeskai.io/media/viral-coaches.jpg" data-src="https://tinydeskai.io/media/viral-coaches.mp4" aria-label="大学橄榄球教练们唱《Outstanding》的爆款 Tiny Desk 视频"></video>
+                <button type="button" class="sound" aria-pressed="false" aria-label="打开声音播放">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z" /><path class="off" d="m16 9 5 6m0-6-5 6" /><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+                </button>
+              </div>
+              <figcaption><b>爆款原片</b><span>TikTok 上 28.8 万赞 · 不是用 shipwords 做的</span></figcaption>
+            </figure>
+            <figure class="clip ours">
+              <div class="clip-frame">
+                <video muted loop playsinline preload="none" poster="https://tinydeskai.io/media/sample-full-band.jpg" data-src="https://tinydeskai.io/media/sample-full-band.mp4" aria-label="用 Tiny Desk AI 制作的 Tiny Desk 视频，五个人全部换掉"></video>
+                <button type="button" class="sound" aria-pressed="false" aria-label="打开声音播放">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z" /><path class="off" d="m16 9 5 6m0-6-5 6" /><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
+                </button>
+              </div>
+              <figcaption><b>Tiny Desk AI 成片</b><span>五个人一次全换 · 示例人像为 AI 生成</span></figcaption>
+            </figure>
+          </div>
+          <div class="case-body">
+            <h2>内置成熟的 AI 能力</h2>
+            <p>Tiny Desk AI 就是用 shipwords 做的，完整源码就在仓库里。左边是爆款原片，右边是站上的一笔真实订单，五个人全换。</p>
+            <ul class="how">
+              <li><b>视频模板</b>把一条爆款视频做成模板：访客上传照片，就能拿到同款视频。Tiny Desk 是第一个，拿来就能照着做。</li>
+              <li><b>成熟的换脸</b>自动换上原角色的服装，口型跟着原曲走，脸没换上的镜头会自动重做。</li>
+              <li><b>主流模型，内置可用</b>GPT Image、Nano Banana、Seedream、FLUX、Seedance、Veo、Kling、Wan 等，填一个 API key 就能用，按次付模型费。</li>
+              <li><b>一个真实站点可以照抄</b>tinydeskai.io 的页面、定价和视频流程，fork 过来就能做你自己的词。</li>
+            </ul>
+            <div class="case-ctas">
+              <a class="btn" href="https://tinydeskai.io/?utm_source=shipwords&amp;utm_medium=www">访问 tinydeskai.io</a>
+              <a class="btn light" href="https://github.com/shipwords-dev/shipwords/tree/main/sites/tinydeskai-example">看这个站的代码</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rows" id="inside">
+        <div class="wrap">
+          <div class="row">
+            <div>
+              <h2>开箱就能收钱</h2>
+              <p>账户、支付、订单、通知，每个站都自带。把页面换成你的关键词，就能开门做生意。</p>
+              <ul class="kit"><li>Google 和邮箱登录</li><li>账户页</li><li>Stripe 和 PayPal</li><li>积分包与订阅</li><li>订单与退款</li><li>邮件通知</li><li>免费试用与防刷</li><li>隐私、条款、退款、DMCA 页面</li><li>SEO 与 llms.txt</li><li>统计</li></ul>
+              <p class="tested"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg><span>收钱的代码所有站共用，并有测试覆盖：重复扣款、重复或乱序的支付通知、失败退款都测过。</span></p>
+            </div>
+            <div class="stage sky-a" aria-hidden="true">
+              <div class="toast"><i>S</i><span><b>收款成功</b>+120 积分 · Stripe</span></div>
+              <div class="window">
+                <div class="chrome">
+                  <div class="dots"><i></i><i></i><i></i></div>
+                  <div class="url" id="site-url">tiny-desk-ai.com</div>
+                </div>
+                <div class="site">
+                  <div class="page">
+                    <div class="topline"><span class="mark"></span><span id="site-kw">Tiny Desk AI</span><span class="guest"><span>游客 · </span>剩 <i id="tries">3</i> 次</span><span class="credits"><i id="cr">120</i> 积分</span><span class="avatar"></span></div>
+                    <div class="result"><img id="site-img" src="/img/result/tiny-desk-ai.webp" alt="" loading="lazy" /><span class="prog"></span><span class="meta">完成 · 2 积分</span></div>
+                    <div class="drop">拖入照片开始<b>生成</b></div>
+                    <div class="sheet login"><b>免费次数用完了</b><span class="gbtn"><svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285f4" d="M17.6 9.2c0-.6-.1-1.2-.2-1.8H9v3.4h4.8a4.1 4.1 0 0 1-1.8 2.7v2.2h2.9c1.7-1.6 2.7-3.9 2.7-6.5z"/><path fill="#34a853" d="M9 18c2.4 0 4.5-.8 5.9-2.2L12 13.6c-.8.5-1.8.9-3 .9-2.3 0-4.3-1.6-5-3.7H1v2.3A9 9 0 0 0 9 18z"/><path fill="#fbbc05" d="M4 10.8a5.4 5.4 0 0 1 0-3.5V5H1a9 9 0 0 0 0 8.1l3-2.3z"/><path fill="#ea4335" d="M9 3.6c1.3 0 2.5.5 3.4 1.3L15 2.4A9 9 0 0 0 1 5l3 2.3c.7-2.1 2.7-3.7 5-3.7z"/></svg>使用 Google 登录</span></div>
+                    <div class="sheet pay"><b>选择积分包</b><span class="plan">40 积分<em>$4.9</em></span><span class="plan">120 积分<em>$9.9</em></span><span class="paybtn">Stripe 支付</span></div>
+                  </div>
+                  <div class="side">
+                    <div class="label">上线即有</div>
+                    <div class="check">游客免费试用 3 次</div>
+                    <div class="check">AI 生成</div>
+                    <div class="check">Google 登录</div>
+                    <div class="check">积分包与订阅</div>
+                    <div class="check">Stripe · PayPal</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="run" id="start">
+        <div class="wrap">
+          <div class="center">
+            <h2>四步，一个下午</h2>
+          </div>
+          <ol class="steps">
+            <li>
+              <div class="shot dom" aria-hidden="true"><span class="url"><i></i>yourkeyword.com</span><span class="tagp">$10.44/年</span></div>
+              <b>买域名</b>
+              <p>在 Cloudflare Registrar 按成本价买下精确匹配的域名。</p>
+            </li>
+            <li>
+              <div class="shot term" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span><em>$</em> pnpm new-site</span><span class="ok">✓ 站点已就绪</span></div>
+              <b>生成站点</b>
+              <p><code>pnpm new-site</code> 复制模板，接好名称、域名和数据库。</p>
+            </li>
+            <li>
+              <div class="shot cfg" aria-hidden="true"><span class="f">site.config.ts</span><span><em>price</em>: { amount: <u>499</u> },</span><span><em>credits</em>: <u>200</u>,</span></div>
+              <b>改成你的</b>
+              <p>写页面、选模型，在 <code>site.config.ts</code> 里定价。</p>
+            </li>
+            <li>
+              <div class="shot ship" aria-hidden="true"><span>Stripe</span><span>Deploy</span><span>Search Console</span><span>IndexNow</span></div>
+              <b>上线</b>
+              <p>按<a href="https://github.com/shipwords-dev/shipwords/blob/main/docs/site-launch.md">上线清单</a>走：收款、部署、Search Console、Bing 和 IndexNow。</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="meadow">
+        <img src="/img/meadow.webp" alt="" width="1672" height="941" loading="lazy" />
+        <div class="head">
+          <h2>此刻，正有人在搜这个词</h2>
+          <p>让他们点进来的，是你的站</p>
+          <a class="btn light" href="https://github.com/shipwords-dev/shipwords">在 GitHub 克隆</a>
+        </div>
+        <div class="marquee" aria-hidden="true">
+          <div class="lane" id="lane-a"></div>
+          <div class="lane rev" id="lane-b"></div>
+        </div>
+      </section>
+
+      <section class="faq">
+        <div class="wrap">
+          <div class="center">
+            <h2>克隆之前，先问清楚</h2>
+          </div>
+          <div class="list">
+            <details open>
+              <summary>shipwords 是什么？</summary>
+              <p>
+                一套免费、MIT 开源的代码，用来同时运营很多个小型 AI 图像和视频站，一个关键词一个站。生成任务、登录、积分、收款和免费试用只写一次，所有站共用；每个站有自己的页面、外观和域名。
+              </p>
+            </details>
+            <details>
+              <summary>和付费的 SaaS 模板有什么不同？</summary>
+              <p>
+                多数模板给你的是一个 SaaS 应用。shipwords 为同时运营很多个 AI 站而建：公共核心修一处所有站都能更新，生图和生视频已经内置，还有一个真实站点的完整源码告诉你怎么上线。
+              </p>
+            </details>
+            <details>
+              <summary>要花多少钱？</summary>
+              <p>
+                代码免费，MIT 许可，可以商用。你要付的是域名（按成本价每年约 10 美元）、Cloudflare 的用量费、每笔订单的 Stripe 或 PayPal 手续费，以及 Yir 上按次计费的模型费用，每个任务的成本上限可以在 <code>site.models.ts</code> 里设定。需要把多段视频拼接起来的站，要开 Cloudflare 的 Workers Paid 套餐。
+              </p>
+            </details>
+            <details>
+              <summary>我需要会写代码吗？</summary>
+              <p>
+                你是在一个代码仓库里工作，但大部分代码由编程 Agent 来写：告诉它关键词，它就能把页面做出来，登录和收款已经写好。你需要能跑终端命令，会注册和配置 Stripe、Cloudflare 账号。
+              </p>
+            </details>
+            <details>
+              <summary>部署在哪里？</summary>
+              <p>
+                Cloudflare。每个站单独部署，有自己的数据库、文件存储和收款账户，上线或下线一个站都不影响其他站。
+              </p>
+            </details>
+            <details>
+              <summary>试用需要模型 API key 吗？</summary>
+              <p>
+                不需要。测试模式（<code>UPSTREAM_MOCK=1</code>，默认开启）下生成会返回样片，不填任何模型 key 就能试完登录、付款和生成。需要真实的图像和视频模型时，再填 API key。
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <!-- biome-ignore lint/a11y/useAnchorContent: aria-label names the link; the wordmark is drawn in CSS -->
+            <a class="brand" href="/zh/" aria-label="shipwords"><span class="wordmark"></span></a>
+            <p class="blurb">每个新关键词，上线一个能收钱的 AI 站。开源，基于 Cloudflare。</p>
+          </div>
+          <div>
+            <h3>项目</h3>
+            <ul>
+              <li><a href="https://github.com/shipwords-dev/shipwords">GitHub</a></li>
+              <li><a href="#start">快速开始</a></li>
+              <li><a href="#inside">功能</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>示例</h3>
+            <ul>
+              <li><a href="https://tinydeskai.io/?utm_source=shipwords&amp;utm_medium=www">在线示例</a></li>
+              <li><a href="https://github.com/shipwords-dev/shipwords/tree/main/sites/tinydeskai-example">示例源码</a></li>
+              <li><a href="https://yir.ai/?utm_source=shipwords&amp;utm_medium=www">Yir</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>支持</h3>
+            <ul>
+              <li><a href="https://github.com/shipwords-dev/shipwords/issues">问题反馈</a></li>
+              <li><a href="https://github.com/shipwords-dev/shipwords/security/advisories/new">安全漏洞报告</a></li>
+              <li><a href="/zh/privacy/">隐私说明</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span>shipwords · MIT 许可 · 基于 Cloudflare</span>
+          <a href="/" hreflang="en" lang="en">English</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="/site.js" defer></script>
+  </body>
+</html>

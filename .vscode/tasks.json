@@ -1,0 +1,120 @@
+{
+  // Ctrl+Shift+P → Tasks: Run Task. Each site task runs in a fixed directory (template, tinydeskai-example, www).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "repo: pnpm install",
+      "type": "shell",
+      "command": "pnpm install",
+      "problemMatcher": []
+    },
+    {
+      "label": "repo: lint (pnpm lint)",
+      "type": "shell",
+      "command": "pnpm lint",
+      "problemMatcher": []
+    },
+    {
+      "label": "repo: format (pnpm format)",
+      "type": "shell",
+      "command": "pnpm format",
+      "problemMatcher": []
+    },
+    {
+      "label": "repo: tool tests (pnpm test:tools)",
+      "type": "shell",
+      "command": "pnpm test:tools",
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "core: check (typecheck + tests)",
+      "type": "shell",
+      "command": "pnpm --filter @shipwords/core check",
+      "problemMatcher": "$tsc",
+      "group": "build"
+    },
+    {
+      "label": "jobs: check (typecheck + tests)",
+      "type": "shell",
+      "command": "pnpm --filter @shipwords/jobs check",
+      "problemMatcher": "$tsc",
+      "group": "build"
+    },
+    {
+      "label": "template: check (typecheck + build + site checks)",
+      "type": "shell",
+      "command": "pnpm check:template",
+      "problemMatcher": "$tsc",
+      "group": "build"
+    },
+    {
+      "label": "template: dev server (pnpm dev)",
+      "type": "shell",
+      "command": "pnpm dev",
+      "options": { "cwd": "${workspaceFolder}/templates/ai-site" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "template: local DB migrations (db:migrate:local)",
+      "type": "shell",
+      "command": "pnpm db:migrate:local",
+      "options": { "cwd": "${workspaceFolder}/templates/ai-site" },
+      "problemMatcher": []
+    },
+    {
+      // Start the dev server first; uses the test key in .dev.vars and forwards to APP_URL/api/webhooks/stripe.
+      "label": "template: Stripe webhook forwarding (stripe listen)",
+      "type": "shell",
+      "command": "node ../../tools/stripe-listen.mjs",
+      "options": { "cwd": "${workspaceFolder}/templates/ai-site" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "tinydeskai-example: check (typecheck + build + site checks)",
+      "type": "shell",
+      "command": "pnpm --filter ./sites/tinydeskai-example check",
+      "problemMatcher": "$tsc",
+      "group": "build"
+    },
+    {
+      // Port comes from the site directory's path (tools/dev-port.mjs); pnpm setup:worktree prints it and writes it to APP_URL.
+      "label": "tinydeskai-example: dev server (pnpm dev)",
+      "type": "shell",
+      "command": "pnpm dev",
+      "options": { "cwd": "${workspaceFolder}/sites/tinydeskai-example" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "tinydeskai-example: local DB migrations (db:migrate:local)",
+      "type": "shell",
+      "command": "pnpm db:migrate:local",
+      "options": { "cwd": "${workspaceFolder}/sites/tinydeskai-example" },
+      "problemMatcher": []
+    },
+    {
+      "label": "tinydeskai-example: Stripe webhook forwarding (stripe listen)",
+      "type": "shell",
+      "command": "node ../../tools/stripe-listen.mjs",
+      "options": { "cwd": "${workspaceFolder}/sites/tinydeskai-example" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "www: dev server (port 6190)",
+      "type": "shell",
+      "command": "pnpm dev",
+      "options": { "cwd": "${workspaceFolder}/apps/www" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    }
+  ]
+}

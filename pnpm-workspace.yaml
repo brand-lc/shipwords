@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - templates/*
+  - sites/*
+  - apps/*
+
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

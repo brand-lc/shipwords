@@ -1,0 +1,15 @@
+{
+  "name": "@shipwords/www",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 6190",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@shipwords/core": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "4.153.0"
+  }
+}

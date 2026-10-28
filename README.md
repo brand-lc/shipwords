@@ -1,0 +1,128 @@
+# shipwords
+
+[English](README.md) · [中文](README.zh-CN.md)
+
+**One keyword. One site. Taking payments the day it launches.**
+
+shipwords is a free, MIT-licensed starter for running a fleet of AI image and video sites, one per keyword, on Cloudflare. Accounts, payments, credits and AI generation are written once and shared; each site has its own pages, look and domain. Website: [shipwords.dev](https://shipwords.dev/).
+
+## Why shipwords
+
+**Built for a fleet of keyword sites.** Put up a site for every new keyword, leave the ones that don't take off, keep improving the ones that do. Fix a bug in the shared core once, and every site can take the update on its next deploy. Each site deploys on its own, with its own database, storage and payment account, so launching or retiring one never touches the others.
+
+**Proven AI, built in.** [tinydeskai.io](https://tinydeskai.io/) is built on shipwords, and its full source is in [`sites/tinydeskai-example`](sites/tinydeskai-example), ready to fork.
+
+- **Video templates**: turn a viral clip into a template; visitors upload photos and get the same video back. Tiny Desk is the first one.
+- **Face swap that holds up**: outfits matched, lips synced to the song, and any shot where the face didn't change is redone automatically.
+- **The popular models, built in**: GPT Image, Nano Banana, Seedream, FLUX, Seedance, Veo, Kling, Wan and more, ready to use.
+
+**Takes money out of the box.** Every site comes with:
+
+- Google and email sign-in, account page
+- Stripe and PayPal, credit packs and subscriptions, orders and refunds
+- Email notifications
+- Free guest tries with abuse limits (reCAPTCHA v3)
+- Privacy, terms, refund and DMCA pages
+- SEO, `sitemap.xml`, `robots.txt`, `llms.txt`, analytics
+
+The money code is shared and tested: double charges, repeated or out-of-order payment events and refunds for failed jobs are all covered.
+
+## Build a site with your coding agent
+
+Paste this into Claude Code, Codex or Cursor, with your own keyword:
+
+```text
+Read shipwords.dev/llms.txt and build a site for "<your keyword>"
+```
+
+The agent clones the repo, creates the site and runs it locally. The rules it follows are in [AGENTS.md](AGENTS.md).
+
+## Quick start
+
+Requirements: Node 24 (see `.nvmrc`), pnpm 10 (`corepack enable`), and Git Bash or WSL on Windows. To go live you will also need a Cloudflare account and a Stripe or PayPal account.
+
+1. Fork or clone this repo, then install:
+
+   ```bash
+   pnpm install
+   ```
+
+2. Create your first site from the template, then install again so the new site gets its dependencies:
+
+   ```bash
+   pnpm new-site my-tool --domain my-tool.com
+   pnpm install
+   ```
+
+3. Put local secrets outside the repo and link them in:
+
+   ```bash
+   mkdir -p ~/.config/shipwords
+   cp sites/my-tool/.dev.vars.example ~/.config/shipwords/my-tool.dev.vars   # fill in test keys
+   pnpm setup:worktree
+   ```
+
+   The example file runs as-is: email sign-in works (the code is printed in the dev server's terminal), new accounts get sign-up credits, and generations use the mock upstream (`UPSTREAM_MOCK=1`), so no model key is needed. Fill in more as you need it:
+   - **Real generations**: a [Yir API key](https://yir.ai/?utm_source=shipwords&utm_medium=readme), with `UPSTREAM_MOCK` turned off.
+   - **Buying credits**: a Stripe test key (`sk_test_…`), then `node ../../tools/stripe-listen.mjs` in the site directory to forward webhooks.
+   - **Guest free tries**: reCAPTCHA keys. Without them, visitors sign in before their first generation.
+   - **Google sign-in**: a Google OAuth client with `http://localhost:<port>` as an origin. Optional; email sign-in works without it.
+
+4. Run it:
+
+   ```bash
+   cd sites/my-tool
+   pnpm db:generate && pnpm db:migrate:local
+   pnpm dev
+   ```
+
+When you are ready to go live, follow [docs/site-launch.md](docs/site-launch.md).
+
+## What it costs
+
+The code is free under MIT, including commercial use. What you pay for:
+
+- Domains (Cloudflare Registrar sells them at cost).
+- Cloudflare usage. Sites that stitch video clips together use Cloudflare Containers and need the Workers Paid plan.
+- Stripe or PayPal fees on each order.
+- Model calls on Yir, billed per request. Each job's maximum cost is set in `site.models.ts`.
+
+## Repository layout
+
+| Directory                  | What it holds                                                                                                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/core`            | D1 + Drizzle, credit ledger with idempotent writes, Stripe and PayPal billing (packs, subscriptions, refunds, disputes), Better Auth, guest quota + reCAPTCHA v3, SEO/GEO helpers, analytics proxy, headless React hooks |
+| `packages/jobs`            | Workflow-based generation runtime with a one-way job state machine and automatic refunds, upstream adapter interface, Yir adapter (`@yir-ai/sdk`), mock upstream for local dev, optional ffmpeg compose container        |
+| `templates/ai-site`        | A complete, working AI image site copied by `pnpm new-site`: home, pricing, account, login, policy pages, `sitemap.xml`, `robots.txt`, `llms.txt`                                                                        |
+| `sites/<site>`             | Your sites, one per keyword, each deployed on its own                                                                                                                                                                    |
+| `sites/tinydeskai-example` | The full source of tinydeskai.io (video effect: photo slots, multi-shot rendering, ffmpeg compose, content pages)                                                                                                        |
+| `apps/<sidecar>`           | Optional small Workers that belong to no single site                                                                                                                                                                     |
+| `tools/`                   | `new-site` scaffolder, `check-site` launch checks, `list-sites`, worktree setup, dev-port, Stripe webhook forwarding (Node built-ins only, with tests)                                                                   |
+| `docs/`                    | Architecture, local development, launch handbook                                                                                                                                                                         |
+
+Each site is a TanStack Start + React 19 app on its own Cloudflare Worker, with D1, R2 and Workflows.
+
+## Common commands
+
+```bash
+pnpm new-site <dir> --domain <domain>   # scaffold sites/<dir> from the template
+pnpm list-sites                         # site list generated from each site's code and README
+pnpm setup:worktree                     # copy local secrets into a new worktree, fix dev ports
+pnpm --filter "./sites/<site>" dev
+pnpm --filter "./sites/<site>" check    # typecheck + build + launch checks
+pnpm check:packages                     # core + jobs: typecheck + tests
+pnpm check:template
+pnpm lint && pnpm test:tools
+```
+
+## Docs
+
+- [Architecture and design choices](docs/architecture.md)
+- [Local development](docs/local-development.md)
+- [Site launch handbook](docs/site-launch.md)
+- [Rules for AI coding agents](AGENTS.md)
+- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
+
+## License
+
+[MIT](LICENSE)

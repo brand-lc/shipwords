@@ -1,0 +1,237 @@
+# Architecture
+
+shipwords is a monorepo for running one AI tool site per keyword. All sites share `packages/`; each site is deployed, configured and paid out on its own.
+
+## 1. Goals
+
+- **One keyword, one site.** Each site is a small, focused tool. Watch it after launch and keep investing in the ones that work.
+- **Payments on day one.** New sites can get traffic from AI search quickly, so every site launches with login, credits and subscriptions already working.
+- **Isolated payouts.** Each site has its own payment account, so a problem with one site does not spill over into the others.
+- **Cloudflare only.** Workers, D1, R2, Workflows (and optionally Containers). One Worker per site.
+- **Fully custom front ends.** Pages, components and styles belong to the site. Unique content is the main defense against looking like a template.
+- **AI-friendly.** Configuration lives in code, every money path has tests, and checks run fast.
+
+## 2. Stack
+
+| Concern          | Choice                                                               | Notes                                                                                                        |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Framework        | TanStack Start + React 19 + `@cloudflare/vite-plugin`                | One Worker per site                                                                                          |
+| UI               | Tailwind v4                                                          | Components live in each site; packages ship headless hooks only                                              |
+| Database         | D1 + Drizzle                                                         | D1 only; migrations use timestamp prefixes                                                                   |
+| Auth             | Better Auth: Google OAuth, One Tap, email one-time codes             | No passwords                                                                                                 |
+| Email            | Cloudflare Email Service (Worker binding)                            | No extra secret needed                                                                                       |
+| Bot defense      | reCAPTCHA v3 (score-based)                                           | Called only on guest generation and sign-up; low scores must sign in. Script loads on first tool interaction |
+| Rate limits      | Guest daily quota and site budget in D1 with conditional writes      | KV is eventually consistent and not suitable for exact counters                                              |
+| Device identity  | IP (IPv6 grouped by /64) plus a signed device cookie                 |                                                                                                              |
+| Disposable email | Built-in blocklist                                                   | Sign-up bonus requires a verified, non-disposable email                                                      |
+| Payments         | Stripe (default) or PayPal, behind one provider interface            | See section 5                                                                                                |
+| Job runtime      | Cloudflare Workflows                                                 | See section 6                                                                                                |
+| Storage          | R2 binding                                                           | Outputs served through the site                                                                              |
+| i18n             | Paraglide                                                            | Production builds ship English only                                                                          |
+| Analytics        | GA4, Rybbit (proxied through the site's `/stats/`), Clarity optional | Configured in `site.config.ts`                                                                               |
+| Errors           | Workers Logs                                                         |                                                                                                              |
+| Tests            | Vitest + `@cloudflare/vitest-plugin`                                 | Money tests run against a real D1 runtime in memory                                                          |
+| Tooling          | pnpm workspace, Biome, strict TypeScript                             | Biome handles both lint and format                                                                           |
+
+## 3. Repository layout
+
+```
+shipwords/
+  AGENTS.md  CLAUDE.md  README.md
+  package.json  pnpm-workspace.yaml  biome.json  tsconfig.base.json  .nvmrc
+  docs/                 confirmed design and handbooks; docs/live/ for unfinished work
+
+  packages/
+    core/               db, auth, billing, credits, quota and bot defense, SEO, analytics, headless hooks
+    jobs/               async job runtime (Workflows), upstream adapters, R2 storage, compose container
+
+  templates/ai-site/    AI site template; pnpm new-site copies it; must pass check on its own
+  sites/<site>/         one complete TanStack Start app per keyword
+    README.md           site profile: target keyword and intent, competitors, launch date, payment account, status
+    DESIGN.md           this site's visual direction
+    site.config.ts      brand, locales, products, quota, billing provider, analytics IDs
+    site.models.ts      models offered by this site, credit cost and upstream cost cap per job
+    src/  messages/  migrations/  public/  wrangler.jsonc  package.json
+
+  apps/<sidecar>/       optional standalone Workers that belong to no single site
+  tools/                repo scripts with tests: new-site, check-site, list-sites, setup-worktree, dev-port, stripe-listen
+```
+
+Why this split: the parts every site shares (auth, billing, credits, quota, bot defense, SEO) are the bulk of the code and carry the most risk, so they exist exactly once. What differs between sites is the product surface, which the site owns completely.
+
+## 4. Rules
+
+1. **Runtime isolation.** Each site has its own Worker, D1, R2 bucket, secrets and payment account.
+2. **Sites never import each other** (enforced by Biome and `check-site`). Reuse means moving code into a package or copying it.
+3. **Packages contain no pages and no styles.**
+4. **Packages contain no site logic.** Sites pass their differences in through `site.config.ts`, `site.models.ts` and registration functions.
+5. **Verification scope.** Changing a package means checking every site that depends on it; money tests live in the packages. Changing one site means checking that site.
+6. **Deploys.** Ship a package change to one site first, watch it, then deploy the other live sites. Inactive sites can keep running their old build.
+7. **Retiring a site.** Delete its directory and take down its Worker, D1, bucket and payment account.
+8. **Migrations.** Package tables and site tables are generated into each site's `migrations/` with `pnpm db:generate` (timestamp prefix) and applied to that site's own D1.
+9. **Secrets** live only in Wrangler secrets (and `.dev.vars` locally, kept outside the repo). The database holds runtime state, not configuration.
+
+## 5. Billing
+
+### 5.1 Principles
+
+- **Atomicity.** Every multi-row money write goes into one D1 batch with guarded conditional updates. Every ledger entry has a unique idempotency key.
+- **Webhooks are signals.** A webhook is verified, deduplicated by provider event ID, and then the current state is fetched from the provider API. Local state is updated from that state, never from the event body, so missed and out-of-order events are harmless.
+- **Settlement in one batch.** Marking an order paid and granting its credits happen in the same batch.
+- **Renewals only move forward.** A subscription period can be claimed only if it is later than the last claimed period.
+- **Refunds and disputes claw back credits** proportionally. Balances may go negative; a negative balance blocks new spending.
+- **Unknown provider names return 404** on `/api/webhooks/:provider`; there is no silent fallback to a default provider.
+
+### 5.2 Product catalog
+
+Products are declared in `site.config.ts`, independent of the payment provider. Amounts are in the smallest currency unit:
+
+```ts
+products: [
+  {
+    id: 'pack_200',
+    kind: 'credits',
+    name: '200 credits',
+    price: { amount: 499, currency: 'usd' },
+    credits: 200,
+    expiresDays: null,
+  },
+  {
+    id: 'pro_month',
+    kind: 'subscription',
+    name: 'Pro monthly',
+    price: { amount: 999, currency: 'usd' },
+    interval: 'month',
+    creditsPerPeriod: 600,
+  },
+];
+```
+
+Stripe uses inline `price_data`, so changing a price is a code change with no pre-created Price. Providers that need pre-created plans (PayPal subscriptions) take an ID in `refs`. Do not change a product `id` after launch.
+
+### 5.3 Provider interface
+
+Adapters translate; they never touch the database.
+
+- `createCheckout(order)`: returns a redirect URL and session ID. Our own order number travels with the checkout (Stripe `client_reference_id` and subscription metadata, PayPal `custom_id` / `invoice_id`).
+- `parseWebhook(request)`: verifies the signature and returns normalized events; unknown events return an empty list.
+- `fetchState(ref)`: reads the current state of an order, subscription or invoice from the provider API.
+- Refund, cancel-at-period-end and customer portal helpers, plus `capabilities` flags for provider differences.
+
+Normalized events are a typed union, each carrying a `providerEventId`: checkout completed, payment succeeded (one-off or one subscription period), payment refunded, dispute opened/closed, subscription updated, subscription ended.
+
+### 5.4 State machine
+
+One state machine is shared by all providers.
+
+- **Tables:** `orders` (one per checkout), `payments` (one per collected payment, unique by provider and invoice), `subscriptions`, `webhook_events` (unique by provider and event ID), plus the credit ledger.
+- **Webhook flow:** verify, insert into `webhook_events` to deduplicate, `fetchState`, update state and grant or revoke credits in one D1 batch, return 200.
+- **Credit grants** use `pay:<paymentId>` as the idempotency key. Subscriptions grant once per paid period; subscription credits expire at period end, pack credits expire after `expiresDays` (or never).
+- **Stripe:** Checkout in `payment` or `subscription` mode; customer portal for cancel, card update and invoices. Stripe is not a merchant of record; enable Stripe Tax (`billing.automaticTax`) or handle sales tax yourself.
+- **PayPal:** packs use Orders v2 and are captured by us (on return and on `CHECKOUT.ORDER.APPROVED`, with a fixed `PayPal-Request-Id`); subscriptions use Subscriptions v1 with a pre-created Plan in `refs.paypal`.
+- **Front end:** `usePricing()` reads the catalog and `useCheckout(productId)` starts a checkout. A site enables one provider at a time through `billing.provider`.
+
+## 6. Generation jobs
+
+- **Adapter interface:** `submit` / `poll` / `cancel`. Adapters never touch the database or credits. Submitting twice with the same idempotency key must return the same upstream job. Yir is the default upstream ([yir.ai](https://yir.ai/?utm_source=shipwords&utm_medium=docs)); add another upstream by implementing the same interface.
+- **Model registry:** each site declares its models in `site.models.ts`: upstream model, credit cost, guest eligibility, allowed parameters, reference limit, per-job upstream cost cap (`maxCost`) and timeout.
+- **Charging:** credits are debited with the job ID as the idempotency key, after a balance check, before submitting upstream. The job ID is also the upstream idempotency key.
+- **One-way states:** conditional updates prevent a failed or cancelled job from becoming succeeded. Failed and cancelled jobs are refunded from their final state.
+- **Cancel** also terminates the Workflow instance.
+- **Observability:** per-stage timestamps and error classification; side effects run in `waitUntil`.
+- **Resumable UI:** in-flight jobs resume after a page refresh.
+- **Mock upstream:** with `UPSTREAM_MOCK` set, outputs are replaced with reference assets (text-only image jobs get the site's `public/mock-output.png`) so the whole flow (upload, charge, poll, store, deliver, refund) runs without a key or cost. It only activates when `APP_URL` is a local host or every payment credential is in test mode (the public demo), so a site that can take real money never serves fake outputs. If `UPSTREAM_MOCK` is set but the mock is inactive, `createAdapters` throws rather than fall through to the paid upstream. A public demo can also set `UPSTREAM_MOCK_RESULT` (and `_SILENT`) to R2 keys so every effect job returns the same finished video.
+- **Compose container (optional):** an ffmpeg service on Cloudflare Containers (`packages/jobs/compose/`) that stitches segments and mixes audio for video sites.
+
+### 6.1 Effects: server-side presets with several segments
+
+An effect is a model entry in `site.models.ts` with an `effect` field: the user only uploads photos, and the server swaps them into fixed reference clips. `createJobs` and `defineGenerationWorkflow` keep their signatures.
+
+- **Input roles:** `ModelDefinition.referenceRole` (`reference_image` or `first_frame`) says how uploads reach the upstream. Default: `reference_image` for image models, `first_frame` for video models. A video job with any `reference_*` input is sent in Yir's `reference` mode, otherwise in `image` mode.
+- **Slots and segments:** `effect.slots` lists the faces a user can fill (`required` or not); `effect.segments` lists the shots, each with a reference video (R2 key under `assets/` or an https URL), the slots it swaps (in `@image1`, `@image2`… order), a prompt builder and parameters. A segment renders only when at least one of its slots is filled; empty segments fall back to the base footage.
+- **Request:** `POST /api/jobs { modelId, slots: { <slotId>: '/files/uploads/…' } }`. Effects ignore `prompt`, `references` and `parameters`. A missing required slot, an unknown slot, a file not uploaded to this site, or no renderable segment returns 400.
+- **Price and cost cap:** one `credits` charge per job, regardless of how many slots or segments. Every segment declares its own `maxCost` (sent upstream as max_cost); `defineModels` rejects segments whose sum exceeds the model's `maxCost`.
+- **Server only:** prompts and reference videos are stored in `input_json` (`prompt` is an empty string) and never leave through `publicJob`. `/files/assets/…` serves reference assets read-only and unlistable.
+- **Several upstream jobs per job:** segments are resolved into `input_json.parts` at creation. `upstream_job_id` holds the upstream IDs in segment order, comma-separated, so there is no extra column or migration; jobs without `parts` run as one segment.
+  - The first submit moves `queued → submitted` (`markSubmitted`); later ones use `appendUpstreamJob`, a conditional update that requires the job to be in flight and the list to hold exactly the earlier parts. Replays skip parts that already have an ID; if the job has ended meanwhile (for example cancelled), the new upstream job is cancelled at once.
+  - Idempotency keys: `jobId` for a single part, `jobId:partId` for several.
+  - Parts are polled in turn (they run in parallel upstream); the timeout still counts from job creation.
+  - Any failed part fails the whole job, cancels the others and refunds in full; the abort path cancels submitted parts too. Cancelling a job cancels every upstream ID.
+  - On success each output is stored as `jobs/<jobId>/<n>.<ext>` and the job is marked succeeded once. The state machine, refunds and guest quota writes are unchanged.
+- **Compose (`effect.compose`):** after all parts are stored, a `compose` step sends the parts, base footage and soundtrack to the container (instance keyed by job ID) with a cut list: per segment its `target` seconds in the final cut, its `base` fallback, and `fit` (`stretch` retimes the whole segment, `trim` keeps the original speed and cuts the first `target` seconds). The container re-encodes to one size and frame rate, concatenates and mixes the soundtrack; the job then lists only `final.mp4` and `final-silent.mp4`. The step is retryable and idempotent per job; when retries run out, or the site has no container binding, the job fails and is refunded in full rather than delivering a partial result.
+- **Site side:** export a `ComposeContainer` class and add `containers`, a `COMPOSE` Durable Object binding and its `migrations` to `wrangler.jsonc` (see the example site). Measured cost: about 33 s of a half vCPU for an 18 s 720p cut, roughly $0.0007 per job at list price.
+
+## 7. Guests and abuse
+
+- Guest quota is enforced by D1 counters per IP and per device cookie, plus a daily budget per site. reCAPTCHA v3 scores raise the bar.
+- A captcha only raises the cost of abuse; solving services are cheap. The real backstop is the quota and the daily site budget.
+- Guest results are attached to the new account after sign-in.
+- The sign-up bonus requires a verified email and blocks disposable domains, with a per-IP daily limit.
+
+## 8. Testing
+
+- **Money unit tests:** race replays, including concurrent debits, duplicate webhooks, out-of-order events and refunds that fail midway.
+- **Site checks:** one command per site runs typecheck, build and launch checks (required routes, policy pages without placeholders, no cross-site imports).
+
+## 9. Parallel development with worktrees
+
+Goal: several AI sessions work in separate worktrees at once, a new worktree is runnable in minutes, merges rarely conflict, and local checks never interfere with each other.
+
+**New worktrees work out of the box**
+
+- `pnpm install` uses the global content-addressed store with hard links. Keep the store on the same disk as the repo, or hard links degrade into copies.
+- Secrets stay outside the repo in `~/.config/shipwords/<site>.dev.vars` (override with `SHIPWORDS_SECRETS`). `pnpm setup:worktree` copies them in.
+- Local D1, R2 and Workflows state lives in each worktree's own `.wrangler/state`.
+- Dev ports are derived from the site directory path, so worktrees never fight over a port.
+
+**Fewer merge conflicts**
+
+- Generated files (`routeTree.gen.ts`, Paraglide output, `worker-configuration.d.ts`) are git-ignored and regenerated by dev, build and check.
+- No central files everyone edits: no barrel `export *` files, messages split by block, `docs/live/` one topic per file, the site list generated from code.
+- Timestamp-prefixed migrations never collide.
+- Lockfile conflicts are resolved by rebasing and rerunning `pnpm install`. Dependency upgrades are their own change.
+
+**Splitting work**
+
+- Sites in parallel: one worktree per site.
+- Packages in series: one session at a time changes `packages/*` and checks every dependent site; others rebase after it lands.
+- Public interface changes (payment adapter, job runtime) start with a short note in `docs/live/`.
+
+**Preview and deploy**
+
+- Preview with `wrangler versions upload` from any worktree; it does not take production traffic.
+- Production deploys run only from main, one site at a time.
+
+## 10. Left open on purpose
+
+These directions are kept possible without code written for them today:
+
+| Direction                                         | What keeps it open                                                            |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| More payment providers                            | Provider interface and provider-neutral product catalog                       |
+| Synchronous conversion tools                      | Execution lives in its own package; a sync-call package can sit beside `jobs` |
+| Many more sites                                   | Independent deploys; selective builds and batch deploys can be added          |
+| A site outgrowing the repo                        | A site depends only on packages and can be moved out with them                |
+| Admin back office, agent API, cron reconciliation | All money state is in D1 tables; reconcile helpers are idempotent             |
+
+## 11. Known limitations
+
+**Not yet verified**
+
+- Stripe subscription renewals (packs, refunds and disputes are tested in test mode). Test renewals with `stripe listen` and a test card before launching a subscription site.
+- PayPal disputes and the second automatic renewal never fired in the sandbox; check the first real renewal after launch.
+- reCAPTCHA scoring is only tested against fake assessment responses; configure a real key before launch.
+
+**Accepted trade-offs**
+
+- Refund amounts and dispute states merge monotonically (refunds only grow; disputes go none → open → won or lost). If a Stripe refund fails and `amount_refunded` shrinks, credits are not restored; re-grant them by hand.
+- The credit ledger uses a per-user version lock, so one user's ledger writes are serialized; heavy concurrent debits for the same user retry (up to 8 times) without affecting correctness.
+- PayPal subscription payments do not expose partial refund amounts, so a partial refund claws back the whole period's credits; refund subscriptions in full only.
+- Cancelling a PayPal subscription takes effect immediately, but the paid period stays active (last payment time plus one interval).
+- Concurrency tests run on workerd's in-memory D1 with `Promise.all`; they approximate interleavings rather than step through them.
+
+**Not built**
+
+- One site using Stripe and PayPal at the same time; each site picks one provider.
+- Timeout fallback runs when a user views the job; a stuck job nobody looks at is not refunded until then. Add a cron sweep if needed.
+- Admin back office, agent API, cross-site stats.

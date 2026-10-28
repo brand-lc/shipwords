@@ -1,0 +1,305 @@
+@import "tailwindcss";
+
+/* Bare-bones template styles, just enough to work. Each new site redoes them per its DESIGN.md; do not keep this look. */
+
+@theme {
+  --color-ink: #16181d;
+  --color-muted: #6b7280;
+  --color-line: #e5e7eb;
+  --color-accent: #2563eb;
+  --color-surface: #ffffff;
+  --color-wash: #f7f7f8;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--color-ink);
+  background: var(--color-wash);
+}
+
+.page {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+.site-header,
+.site-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+  gap: 1rem;
+}
+.site-header nav,
+.site-footer nav {
+  display: flex;
+  gap: 1rem;
+}
+.site-footer {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+  border-top: 1px solid var(--color-line);
+  margin-top: 4rem;
+}
+.brand {
+  font-weight: 700;
+  text-decoration: none;
+  color: inherit;
+}
+a {
+  color: var(--color-accent);
+}
+
+h1 {
+  font-size: 2.25rem;
+  line-height: 1.15;
+  margin: 2rem 0 0.5rem;
+}
+h2 {
+  font-size: 1.25rem;
+  margin: 2rem 0 0.5rem;
+}
+.lead,
+.muted {
+  color: var(--color-muted);
+}
+
+.tool-form,
+.login form {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+textarea,
+input,
+select {
+  font: inherit;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+}
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+.tool-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+button {
+  font: inherit;
+  padding: 0.55rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
+  font-weight: 600;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.references {
+  display: flex;
+  gap: 0.5rem;
+}
+.references button {
+  padding: 0;
+  overflow: hidden;
+}
+.references img {
+  display: block;
+  object-fit: cover;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+.job {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+}
+.job img,
+.job video {
+  width: 100%;
+  border-radius: 0.5rem;
+  display: block;
+}
+.job-pending {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  background: var(--color-wash);
+  border-radius: 0.5rem;
+  color: var(--color-muted);
+}
+.job-prompt {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+.plan {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+.price {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin: 0.25rem 0;
+}
+.balance {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0;
+}
+.error {
+  color: #b91c1c;
+}
+.notice {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+}
+.login {
+  max-width: 24rem;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.55rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  color: inherit;
+  text-decoration: none;
+}
+.button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
+  font-weight: 600;
+}
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-line);
+  color: var(--color-ink);
+  text-decoration: none;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.return-notice {
+  display: block;
+  margin-top: 1rem;
+  color: inherit;
+  text-decoration: none;
+}
+.job .button {
+  margin-top: 0.5rem;
+}
+
+/* Shared by the sign-in, pricing and account dialogs */
+.dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1.5rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+}
+.dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+.dialog h2 {
+  margin-top: 0;
+}
+.pricing-dialog {
+  width: min(48rem, calc(100vw - 2rem));
+}
+.dialog-close {
+  float: right;
+  padding: 0 0.5rem;
+  border: 0;
+  background: none;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+.sign-in form {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+.google-button {
+  min-height: 44px;
+}
+.account-card {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+}
+.account-card h3 {
+  margin-top: 0;
+}
+
+/* Checkout return: full-screen overlay */
+.pay-return {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: var(--color-wash);
+}
+.pay-return-card {
+  max-width: 28rem;
+  padding: 2rem;
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+}
+.pay-return-card h1 {
+  margin-top: 0;
+}
+
+.legal {
+  max-width: 44rem;
+}

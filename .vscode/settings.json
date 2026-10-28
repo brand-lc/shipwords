@@ -1,0 +1,42 @@
+{
+  // Tasks come from .vscode/tasks.json; hide auto-detected tsc, npm and Go tasks.
+  "typescript.tsc.autoDetect": "off",
+  "npm.autoDetect": "off",
+  "go.tasks.provideDefault": false,
+  "grunt.autoDetect": "off",
+  "gulp.autoDetect": "off",
+  "jake.autoDetect": "off",
+
+  "editor.defaultFormatter": "biomejs.biome",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports.biome": "explicit",
+    "source.fixAll.biome": "explicit"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+
+  "files.exclude": {
+    "**/.wrangler": true,
+    "**/.tanstack": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.preview": true,
+    "**/.output": true,
+    "**/.wrangler": true,
+    "**/.tanstack": true,
+    "**/routeTree.gen.ts": true,
+    "**/src/paraglide": true,
+    "**/worker-configuration.d.ts": true,
+    "pnpm-lock.yaml": true
+  },
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/.preview/**": true,
+    "**/.output/**": true,
+    "**/.wrangler/**": true,
+    "**/.tanstack/**": true
+  }
+}

@@ -1,0 +1,43 @@
+import { defineSite } from '@shipwords/core/site';
+
+// The source of tinydeskai.io, open-sourced as a complete shipwords example. url is a placeholder: set your own domain.
+// All config for this site. Price amounts are in the smallest currency unit (cents). Never change ids after launch.
+// Same flow as competing sites: sign in, then buy, then generate. No guest trial and no sign-up bonus.
+export default defineSite({
+  id: 'tinydeskaiex',
+  name: 'Tiny Desk AI',
+  url: 'https://tinydeskai.example.com',
+  locales: ['en'],
+  defaultLocale: 'en',
+  // Same price for 1–5 people; one video = 10 credits.
+  products: [
+    {
+      id: 'video_1',
+      kind: 'credits',
+      name: '1 video',
+      price: { amount: 899, currency: 'usd' },
+      credits: 10,
+      expiresDays: null,
+    },
+    {
+      id: 'video_3',
+      kind: 'credits',
+      name: '3 videos',
+      price: { amount: 1799, currency: 'usd' },
+      credits: 30,
+      expiresDays: null,
+    },
+    {
+      id: 'video_5',
+      kind: 'credits',
+      name: '5 videos',
+      price: { amount: 2699, currency: 'usd' },
+      credits: 50,
+      expiresDays: null,
+    },
+  ],
+  signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 0 },
+  guest: { dailyPerDevice: 0, dailyPerIp: 0, dailySiteBudget: 0, minRecaptchaScore: 0.5 },
+  billing: { provider: 'stripe', automaticTax: false },
+  analytics: {},
+});
