@@ -9,13 +9,13 @@ export default defineSite({
   url: 'https://tinydeskai.example.com',
   locales: ['en'],
   defaultLocale: 'en',
-  // Same price for 1–5 people; one video = 10 credits.
+  // Same price for 1–5 people; one video = 10 credits. Each video costs about $3.06 upstream (Kling 4.0, 720p, one run).
   products: [
     {
       id: 'video_1',
       kind: 'credits',
       name: '1 video',
-      price: { amount: 899, currency: 'usd' },
+      price: { amount: 998, currency: 'usd' },
       credits: 10,
       expiresDays: null,
     },
@@ -23,16 +23,16 @@ export default defineSite({
       id: 'video_3',
       kind: 'credits',
       name: '3 videos',
-      price: { amount: 1799, currency: 'usd' },
+      price: { amount: 2499, currency: 'usd' },
       credits: 30,
       expiresDays: null,
     },
     {
-      id: 'video_5',
+      id: 'video_10',
       kind: 'credits',
-      name: '5 videos',
-      price: { amount: 2699, currency: 'usd' },
-      credits: 50,
+      name: '10 videos',
+      price: { amount: 5999, currency: 'usd' },
+      credits: 100,
       expiresDays: null,
     },
   ],

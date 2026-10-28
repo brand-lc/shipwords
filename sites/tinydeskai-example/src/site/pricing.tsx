@@ -76,7 +76,7 @@ const INCLUDES = [
 const PACK_NAMES: Record<string, () => string> = {
   video_1: m.common_pack_video_1,
   video_3: m.common_pack_video_3,
-  video_5: m.common_pack_video_5,
+  video_10: m.common_pack_video_10,
 };
 
 export const packName = (product: (typeof site.products)[number]) =>

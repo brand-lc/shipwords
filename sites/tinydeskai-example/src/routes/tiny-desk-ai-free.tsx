@@ -2,7 +2,7 @@ import { pageHead } from '@shipwords/core/seo';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { m } from '~/paraglide/messages.js';
 import { Faq, type FaqItem, faqJsonLd, GuidePage } from '~/site/guide';
-import { formatPrice, packName } from '~/site/pricing';
+import { formatPrice, packName, perVideo } from '~/site/pricing';
 import site from '../../site.config';
 
 // Free and comparison page: targets "tiny desk ai free", "free online" and "best tiny desk ai generator".
@@ -185,7 +185,7 @@ function FreePage() {
       <h2>{m.guides_free_cheaper_heading()}</h2>
       <ul>
         <li>{m.guides_free_cheaper_people({ price: formatPrice(site.products[0]) })}</li>
-        <li>{m.guides_free_cheaper_packs({ price: formatPrice(site.products[2]) })}</li>
+        <li>{m.guides_free_cheaper_packs({ price: perVideo(site.products[1]) })}</li>
         <li>{m.guides_free_cheaper_not()}</li>
       </ul>
       <p>

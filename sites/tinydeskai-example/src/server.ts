@@ -25,7 +25,7 @@ export class ComposeContainer extends Container {
     if (!container?.images) return;
     const start = container.start.bind(container);
     container.start = (options) =>
-      start({ ...options, image: container.images?.compose, instance: 'standard-1' } as never);
+      start({ ...options, image: container.images?.compose, instance: 'standard-3' } as never);
   }
 }
 

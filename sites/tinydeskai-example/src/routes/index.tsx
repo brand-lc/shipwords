@@ -8,9 +8,8 @@ import { ReturnNotice, TinyDeskTool } from '~/site/tool';
 import site from '../../site.config';
 
 // Generator home page: face swap any of the 5 slots on stage, same price for 1–5 people. Sign in (Google One Tap), buy credits, then generate; no free trial.
-// Upload and generation live in ~/site/tool; the output is base clip + swapped segments + original audio, plus a silent copy.
+// Upload and generation live in ~/site/tool; the whole clip is swapped in one pass, re-aligned to the original cuts with the song mixed back in, plus a silent copy.
 // The generator suggests friends, coworkers and teammates, never uploading celebrity photos.
-// The hero sample defaults to a viral TikTok, labeled as a trend reference; a switch shows a real output from this site instead.
 // Copy lives in messages/home; locale depends on the request, so the constants below hold message functions called at render.
 
 const RESOLUTION = '720p';
@@ -204,9 +203,19 @@ function SoundClip({ clip, tag, label }: { clip: string; tag: string; label: str
   );
 }
 
-// Hero sample: defaults to the top viral TikTok (College Football Week 8, about 288K likes), starting at the three coaches singing (skipping the opening profile shot).
-// It can switch to a real output from this site: all 5 swapped (AI-generated faces), eye-masked reference clips at 720p in one run, the same pipeline paying users get.
+// Hero sample: defaults to the dog version (every competitor's sample is people, so pets set us apart): Kling 4.0 edit mode swaps
+// all 5 for AI-generated dogs in one run (a few human fingers still show at the keyboard's lower edge), re-timed per shot to match the original frame by frame.
+// It can switch to the top viral TikTok (College Football Week 8, about 288K likes, starting at the three coaches singing, skipping the opening profile shot),
+// or to a real output with people: all 5 swapped (AI-generated faces), same pipeline, original song mixed back in.
 const HERO_CLIPS = {
+  dogs: {
+    clip: 'sample-dogs',
+    tab: m.home_hero_tab_dogs,
+    tag: m.home_dogs_band_tag,
+    label: m.home_dogs_band_label,
+    hook: m.home_dogs_band_hook,
+    note: m.home_dogs_band_note,
+  },
   viral: {
     clip: 'viral-coaches',
     tab: m.home_hero_tab_viral,
@@ -256,8 +265,14 @@ const root = getRouteApi('__root__');
 function HomePage() {
   const config = root.useLoaderData();
   const generation = useGeneration({ recaptchaSiteKey: config.recaptchaSiteKey });
-  // The hero sample and the stage show the same cast: switching to our output swaps the stage to the new faces too, so it is clear who replaced whom.
-  const [heroView, setHeroView] = useState<HeroView>('viral');
+  // Once the user picks a sample, the stage shows the same cast, so it is clear who replaced whom.
+  // On load the sample is the dog version but the stage keeps the original coaches: empty seats keep the coaches in the output, and a stage full of dogs would suggest they become dogs too.
+  const [heroView, setHeroView] = useState<HeroView>('dogs');
+  const [stage, setStage] = useState<HeroView>('viral');
+  const pickHero = (view: HeroView) => {
+    setHeroView(view);
+    setStage(view);
+  };
   return (
     <>
       <section className="hero" id="make">
@@ -267,9 +282,9 @@ function HomePage() {
           <h1>{m.home_hero_title()}</h1>
           <p className="lead">{m.home_hero_lead()}</p>
         </div>
-        <HeroClip view={heroView} onPick={setHeroView} />
+        <HeroClip view={heroView} onPick={pickHero} />
         <div className="hero-tool">
-          <TinyDeskTool generation={generation} stage={heroView} />
+          <TinyDeskTool generation={generation} stage={stage} />
         </div>
       </section>
 

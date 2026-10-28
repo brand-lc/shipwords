@@ -31,7 +31,7 @@
     }
   ],
   // Effect compose container: ffmpeg image in packages/jobs/compose. Uses durable_object scheduling; the instance type
-  // (standard-1: 1/2 vCPU, 4 GiB, about 33 s per video) is set in start() in server.ts.
+  // (standard-3: 2 vCPU, 8 GiB; on standard-1's 1/2 vCPU the face check took 25–30 s and compose 60 s) is set in start() in server.ts.
   "containers": [
     {
       "class_name": "ComposeContainer",

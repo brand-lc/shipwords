@@ -65,6 +65,7 @@ function orderStatus(order: Order) {
 
 // Output order: with original audio, then silent (composeOutputs in packages/jobs).
 const DOWNLOADS = [m.common_job_download_song, m.common_job_download_silent];
+const VERSIONS = ['song', 'silent'];
 
 function videoStatus(job: PublicJob) {
   if (job.status === 'queued' || job.status === 'submitted') return m.common_videos_rendering();
@@ -94,7 +95,7 @@ function MyVideos() {
               {job.outputs.map((output, i) => (
                 <span key={output.url}>
                   {' · '}
-                  <a href={output.url} download>
+                  <a href={output.url} download={`tiny-desk-ai-${job.id.slice(-6)}-${VERSIONS[i] ?? i}.mp4`}>
                     {(DOWNLOADS[i] ?? m.common_job_download)()}
                   </a>
                 </span>

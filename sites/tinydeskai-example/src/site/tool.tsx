@@ -1,6 +1,14 @@
 import { type PublicJob, uploadReference, type useGeneration } from '@shipwords/jobs/react';
 import { getRouteApi } from '@tanstack/react-router';
-import { type DragEvent, type FormEvent, type PointerEvent, useEffect, useRef, useState } from 'react';
+import {
+  type DragEvent,
+  type FormEvent,
+  type PointerEvent,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { authClient } from '~/lib/auth';
 import { identify, track } from '~/lib/track';
 import { m } from '~/paraglide/messages.js';
@@ -16,7 +24,6 @@ import models from '../../site.models';
 
 const MODEL = models[0];
 const SLOTS = MODEL.effect?.slots ?? [];
-const SEGMENTS = MODEL.effect?.segments ?? [];
 const PRODUCT = site.products.find((p) => p.kind === 'credits' && p.credits === MODEL.credits);
 const PRICE = PRODUCT ? formatPrice(PRODUCT) : '';
 
@@ -24,6 +31,7 @@ const PRICE = PRODUCT ? formatPrice(PRODUCT) : '';
  * The stage image public/media/stage.jpg is three frames of the viral clip (left: band at 16.8 s, top right: lead at 9.8 s, bottom right: sax at 14.9 s), 1020×960.
  * stage-ours.jpg is the hero output at the same moments (the output starts at 1.375 s of the original, so each minus 1.375) with the same scale and crop; the slot coordinates fit both images.
  * x and y are each face center as a percent of stage width and height; size is the slot diameter as a percent of stage width. Remeasure if the image changes.
+ * stage-dogs.jpg is the dog output cut the same way, except the band frame is at 15.1 s (at 15.425 s the golden retriever raises what looks like a human hand); faces sit in the same places.
  * edge: the face touches the stage's left edge, so the name label is left-aligned and not clipped on narrow screens.
  */
 const SEATS: Record<
@@ -84,8 +92,8 @@ export function TinyDeskTool({
   stage = 'viral',
 }: {
   generation: ReturnType<typeof useGeneration>;
-  /** The stage image follows the hero sample: coaches for the original, the swapped-in faces for our output (stage-ours.jpg, same frames and crop, same slot coordinates). */
-  stage?: 'viral' | 'ours';
+  /** The stage image follows the hero sample: coaches for the original, the swapped-in faces for our output (stage-ours.jpg), five dogs for the dog version (stage-dogs.jpg); all three share the slot coordinates. */
+  stage?: 'viral' | 'ours' | 'dogs';
 }) {
   const config = root.useLoaderData();
   const auth = authClient(config.googleClientId);
@@ -111,6 +119,8 @@ export function TinyDeskTool({
   const [drag, setDrag] = useState<{ from: string; x: number; y: number; target: string | null } | null>(
     null,
   );
+  // Shown once after Generate: a video takes minutes, so tell the user they can walk away and get an email.
+  const started = useRef<HTMLDialogElement>(null);
   const press = useRef<{ from: string; x: number; y: number } | null>(null);
   const dragged = useRef(false);
   // Slot under the pointer while a file is dragged in from the desktop: dropping uploads the photo here.
@@ -122,6 +132,8 @@ export function TinyDeskTool({
     if (load<boolean>(CONSENT_KEY)) setConsent(true);
     // Back from checkout (RESUME_PATH in pricing.tsx): show a notice, then drop resume from the URL so a reload does not repeat it.
     const url = new URL(window.location.href);
+    // ?started opens the "generation started" dialog directly, to check it without placing an order.
+    if (url.searchParams.has('started')) showStarted(started.current);
     if (url.searchParams.has('resume')) {
       setResumed(Boolean(saved && Object.keys(saved).length));
       url.searchParams.delete('resume');
@@ -165,7 +177,6 @@ export function TinyDeskTool({
   }, [rendering]);
 
   const filled = SLOTS.filter((slot) => photos[slot.id]).map((slot) => slot.id);
-  const shots = SEGMENTS.filter((segment) => segment.slots.some((id) => photos[id])).length;
 
   async function onPick(slotId: string, file: File | undefined, via: 'picker' | 'drop') {
     if (!file) return;
@@ -298,7 +309,9 @@ export function TinyDeskTool({
 
   async function start() {
     const job = await generate({ modelId: MODEL.id, slots: photos });
-    if (job) track('generate_started', { faces: filled.length, shots, another: rendering });
+    if (!job) return;
+    track('generate_started', { faces: filled.length, another: rendering });
+    showStarted(started.current);
   }
 
   async function onSubmit(event: FormEvent) {
@@ -351,7 +364,12 @@ export function TinyDeskTool({
       </div>
 
       <fieldset
-        className={['desk', stage === 'ours' && 'desk-ours', drag && 'desk-dragging']
+        className={[
+          'desk',
+          stage === 'ours' && 'desk-ours',
+          stage === 'dogs' && 'desk-dogs',
+          drag && 'desk-dragging',
+        ]
           .filter(Boolean)
           .join(' ')}
         ref={desk}
@@ -428,12 +446,7 @@ export function TinyDeskTool({
       </fieldset>
 
       <p className="desk-status mono">
-        {(shots === 1 ? m.common_tool_status_one : m.common_tool_status)({
-          filled: filled.length,
-          total: SLOTS.length,
-          shots,
-          price: PRICE,
-        })}
+        {m.common_tool_status({ filled: filled.length, total: SLOTS.length, price: PRICE })}
       </p>
       <p className="muted tips">{m.common_tool_tips()}</p>
       <PhoneHandoff place={placeFromPhone} />
@@ -482,7 +495,46 @@ export function TinyDeskTool({
           </button>
         </p>
       )}
+      <StartedDialog dialog={started} email={session.data?.user.email} />
     </form>
+  );
+}
+
+// Focus the dialog itself: by default focus lands on "Got it" and the button opens with a focus ring.
+function showStarted(dialog: HTMLDialogElement | null) {
+  dialog?.showModal();
+  dialog?.focus();
+}
+
+function StartedDialog({ dialog, email }: { dialog: RefObject<HTMLDialogElement | null>; email?: string }) {
+  const close = () => dialog.current?.close();
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: clicking the backdrop is only a mouse shortcut; keyboards close it with the native Esc.
+    <dialog
+      ref={dialog}
+      className="sign-in-dialog started-dialog"
+      aria-labelledby="started-title"
+      tabIndex={-1}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <svg className="started-cup" viewBox="0 0 48 48" aria-hidden="true">
+        <path className="steam" d="M17 5c-2 3 2 5 0 8" />
+        <path className="steam" d="M23 3c-2 3 2 5 0 8" />
+        <path className="steam" d="M29 5c-2 3 2 5 0 8" />
+        <path d="M10 19h26v10a10 10 0 0 1-10 10h-6a10 10 0 0 1-10-10z" />
+        <path d="M36 22h2a5 5 0 0 1 0 10h-2.5" />
+        <path d="M7 44h32" />
+      </svg>
+      <h2 id="started-title">{m.common_started_title()}</h2>
+      <p>{m.common_started_body()}</p>
+      <p>{email ? m.common_started_email({ email }) : m.common_started_email_generic()}</p>
+      <p className="muted started-return">{m.common_started_return()}</p>
+      <button type="button" className="primary" onClick={close}>
+        {m.common_started_ok()}
+      </button>
+    </dialog>
   );
 }
 
@@ -536,30 +588,47 @@ function GenerationError({ code, message }: { code: string | undefined; message:
 
 // Output order: with original audio, then silent (composeOutputs in packages/jobs).
 const DOWNLOADS = [m.common_job_download_song, m.common_job_download_silent];
+// Download file names: the R2 keys are 0.mp4 / 1.mp4, which are indistinguishable once saved to a phone.
+const VERSIONS = ['song', 'silent'];
 
 const STAGES = [
   { after: 0, text: m.common_job_stage_setup },
-  { after: 60, text: m.common_job_stage_swap },
-  { after: 150, text: m.common_job_stage_mix },
+  { after: 120, text: m.common_job_stage_swap },
+  { after: 360, text: m.common_job_stage_mix },
 ];
+// Only say it is slower than usual one minute past the 10-minute estimate.
+const OVERTIME_AFTER = 660;
+
+function formatElapsed(seconds: number) {
+  const s = Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
 
 function JobCard({ job, email }: { job: PublicJob; email?: string }) {
   const active = job.status === 'queued' || job.status === 'submitted';
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 5000);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [active]);
   const elapsed = Math.max(0, (now - job.createdAt) / 1000);
   const stage = STAGES.filter((s) => elapsed >= s.after).at(-1)!;
+  const overtime = elapsed >= OVERTIME_AFTER;
 
   return (
     <article className="job">
       {active && (
         <div className="job-pending">
-          <p>{stage.text()}</p>
-          <p className="mono">{m.common_job_eta()}</p>
+          <p>
+            <span className="rec-dot" aria-hidden="true" />
+            {stage.text()}
+          </p>
+          {/* Elapsed time comes from the client clock, so it always differs from the server-rendered value */}
+          <p className="mono" suppressHydrationWarning>
+            {formatElapsed(elapsed)} · {overtime ? m.common_job_eta_overtime() : m.common_job_eta()}
+          </p>
+          {overtime && <p className="muted">{m.common_job_overtime()}</p>}
           <p className="muted">{email ? m.common_job_email({ email }) : m.common_job_email_generic()}</p>
         </div>
       )}
@@ -573,9 +642,9 @@ function JobCard({ job, email }: { job: PublicJob; email?: string }) {
                 key={output.url}
                 className="button"
                 href={output.url}
-                download
+                download={`tiny-desk-ai-${job.id.slice(-6)}-${VERSIONS[i] ?? i}.mp4`}
                 data-rybbit-event="video_download"
-                data-rybbit-prop-version={i === 0 ? 'song' : 'silent'}
+                data-rybbit-prop-version={VERSIONS[i] ?? i}
               >
                 {(DOWNLOADS[i] ?? m.common_job_download)()}
               </a>
