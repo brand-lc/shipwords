@@ -617,19 +617,15 @@ describe('effect compose', () => {
       original: 'assets/demo/base-left.mp4',
       faces: { left: [0.5, 0.4] as const },
       maxSimilarity: 0.6,
-      retries: 1,
     };
     const groupCheck = {
       original: 'assets/demo/base-group.mp4',
       faces: { left: [0.3, 0.5] as const, right: [0.7, 0.5] as const },
       maxSimilarity: 0.6,
-      retries: 0,
     };
     const checkModel: ModelDefinition = {
       ...composeModel,
       id: 'demo-check',
-      // The left segment runs at most twice: 0.30 × 2 + 0.20 + 0.30.
-      maxCost: '1.10',
       effect: {
         ...composeModel.effect!,
         segments: composeModel.effect!.segments.map((segment) =>
@@ -647,7 +643,6 @@ describe('effect compose', () => {
       models: checkModels,
       composer,
     });
-    const retryKey = (jobId: string) => `${jobId}:left:retry1`;
 
     async function checkJob() {
       const job = await effectJob({ left: '/files/uploads/up_a.png' });
@@ -683,53 +678,45 @@ describe('effect compose', () => {
       expect((await getBalance(db, userId)).available).toBe(40);
     });
 
-    it('first run not swapped: reruns once with the same parameters, compose uses the rerun output after the check passes', async () => {
-      const { userId, jobId } = await checkJob();
-      const adapter = adapterFor(jobId);
-      adapter.polls.set(`up_${retryKey(jobId)}`, [{ state: 'running' }, succeeded('left-retry')]);
-      const composer = new FakeComposer();
-      composer.scores = [
-        [0.84, 0.81, 0.6],
-        [0.4, 0.38],
-      ];
-      await runGeneration(checkDeps(adapter, composer), jobId, durableSteps());
-      expect(adapter.submits.map((s) => s.key)).toEqual([`${jobId}:left`, `${jobId}:group`, retryKey(jobId)]);
-      expect(adapter.submits[2]!.input).toEqual(adapter.submits[0]!.input);
-      expect(composer.checks.map((c) => c.key)).toEqual([
-        `jobs/${jobId}/0.mp4`,
-        `jobs/${jobId}/1.mp4`,
-        `jobs/${jobId}/2.mp4`,
-      ]);
-      expect(composer.calls[0]!.segments.map((s) => s.key)).toEqual([
-        `jobs/${jobId}/1.mp4`,
-        'assets/demo/base-right.mp4',
-        `jobs/${jobId}/2.mp4`,
-      ]);
-      const job = await loadJob(db, jobId);
-      expect(job).toMatchObject({ status: 'succeeded' });
-      expect(job!.upstreamJobId!.split(',')).toEqual([
-        `up_${jobId}:left`,
-        `up_${jobId}:group`,
-        `up_${retryKey(jobId)}`,
-      ]);
-      expect((await getBalance(db, userId)).available).toBe(40);
-    });
-
-    it('still not swapped after rerun: whole job fails swap_not_applied, cancels running segments, refunds once', async () => {
+    it('not swapped: no rerun, whole job fails swap_not_applied, cancels running segments, no compose, refunds once', async () => {
       const { userId, jobId } = await checkJob();
       const adapter = adapterFor(jobId);
       adapter.polls.set(`up_${jobId}:group`, []);
-      adapter.polls.set(`up_${retryKey(jobId)}`, [succeeded('left-retry')]);
       const composer = new FakeComposer();
-      composer.scores = [[0.86], [0.8]];
+      composer.scores = [[0.86, 0.81]];
       await runGeneration(checkDeps(adapter, composer), jobId, durableSteps());
       expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'swap_not_applied' });
-      expect(adapter.cancelled).toEqual(
-        expect.arrayContaining([`up_${jobId}:group`, `up_${retryKey(jobId)}`]),
-      );
+      expect(adapter.submits.map((s) => s.key)).toEqual([`${jobId}:left`, `${jobId}:group`]);
+      expect(adapter.cancelled).toEqual(expect.arrayContaining([`up_${jobId}:group`]));
       expect(composer.calls).toHaveLength(0);
+      expect((await getBalance(db, userId)).available).toBe(50);
       await markFailed(db, jobId, 'failed', 'again', 'again');
       expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('check result cached before an interruption is reused on replay, not checked again', async () => {
+      const { jobId } = await checkJob();
+      const adapter = adapterFor(jobId);
+      const composer = new FakeComposer();
+      composer.scores = [[0.3], [0.2]];
+      const cache = new Map<string, unknown>();
+      const crashing: StepRunner = {
+        async do(name, fn) {
+          if (name.startsWith('poll:group') || name === 'abort' || name === 'settle')
+            throw new Error('stop here');
+          if (cache.has(name)) return cache.get(name) as never;
+          const value = await fn();
+          cache.set(name, value);
+          return value;
+        },
+        async sleep() {},
+      };
+      await expect(runGeneration(checkDeps(adapter, composer), jobId, crashing)).rejects.toThrow();
+      await runGeneration(checkDeps(adapter, composer), jobId, durableSteps(cache));
+      // left was checked before the interruption; on replay only group is checked.
+      expect(composer.checks.map((c) => c.key)).toEqual([`jobs/${jobId}/0.mp4`, `jobs/${jobId}/1.mp4`]);
+      expect(adapter.submits).toHaveLength(2);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
     });
 
     it('check errors: whole job fails check_failed, no rerun, no compose, running segments canceled, refunded once', async () => {
@@ -819,58 +806,6 @@ describe('effect compose', () => {
       ).toThrow(/cuts need compose/);
     });
 
-    it('replay after interruption following rerun submit: rerun not resubmitted, check results reused from cache', async () => {
-      const { jobId } = await checkJob();
-      const adapter = adapterFor(jobId);
-      adapter.polls.set(`up_${retryKey(jobId)}`, [succeeded('left-retry')]);
-      const composer = new FakeComposer();
-      composer.scores = [[0.9]];
-      const cache = new Map<string, unknown>();
-      const crashing: StepRunner = {
-        async do(name, fn) {
-          if (name.startsWith('poll:left:retry1') || name === 'abort' || name === 'settle')
-            throw new Error('stop here');
-          if (cache.has(name)) return cache.get(name) as never;
-          const value = await fn();
-          cache.set(name, value);
-          return value;
-        },
-        async sleep() {},
-      };
-      await expect(runGeneration(checkDeps(adapter, composer), jobId, crashing)).rejects.toThrow();
-      await runGeneration(checkDeps(adapter, composer), jobId, durableSteps(cache));
-      expect(adapter.submits.filter((s) => s.key === retryKey(jobId))).toHaveLength(1);
-      // First run: left round 0. Replay: left round 0 from cache, then left round 1 and group.
-      expect(composer.checks).toHaveLength(3);
-      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
-    });
-
-    it('user already canceled when rerun is submitted: cancels the new rerun task, stops polling, refunds', async () => {
-      const { userId, jobId } = await checkJob();
-      const adapter = adapterFor(jobId);
-      adapter.onSubmit = async (key) => {
-        if (key === retryKey(jobId)) await markFailed(db, jobId, 'canceled', 'canceled', 'user canceled');
-      };
-      const composer = new FakeComposer();
-      composer.scores = [[0.9]];
-      await runGeneration(checkDeps(adapter, composer), jobId, durableSteps());
-      expect(adapter.cancelled).toContain(`up_${retryKey(jobId)}`);
-      expect(await loadJob(db, jobId)).toMatchObject({ status: 'canceled' });
-      expect(composer.calls).toHaveLength(0);
-      expect((await getBalance(db, userId)).available).toBe(50);
-    });
-
-    it('group shot with no retries: an original face still there fails the job right away with a refund', async () => {
-      const { userId, jobId } = await checkJob();
-      const adapter = adapterFor(jobId);
-      const composer = new FakeComposer();
-      composer.scores = [[0.3], [0.91]];
-      await runGeneration(checkDeps(adapter, composer), jobId, durableSteps());
-      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'swap_not_applied' });
-      expect(adapter.submits).toHaveLength(2);
-      expect((await getBalance(db, userId)).available).toBe(50);
-    });
-
     it('jobs stored before parts recorded their slots: nothing is checked, delivered as is', async () => {
       const { jobId } = await checkJob();
       const job = await loadJob(db, jobId);
@@ -911,39 +846,7 @@ describe('effect compose', () => {
       expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
     });
 
-    it('old-format check whose first round already ran and failed: the cached rerun is replayed, output numbering stays the same', async () => {
-      const { jobId } = await checkJob();
-      const adapter = adapterFor(jobId);
-      adapter.polls.set(`up_${retryKey(jobId)}`, [succeeded('left-retry')]);
-      const composer = new FakeComposer();
-      // What an older version cached: its load with SSIM settings, and a first check round that found the swap missing.
-      const cache = new Map<string, unknown>([['check:left:0', { scores: [0.9] }]]);
-      const steps = durableSteps(cache);
-      const replaying: StepRunner = {
-        async do(name, fn) {
-          const value = await steps.do(name, fn);
-          if (name !== 'load' || !value || typeof value !== 'object' || !('checks' in value)) return value;
-          return {
-            ...value,
-            checks: {
-              left: { maxSimilarity: 0.75, retries: 1, referenceKey: 'assets/demo/left.mp4', seconds: 5.333 },
-            },
-          } as never;
-        },
-        sleep: (name, ms) => steps.sleep(name, ms),
-      };
-      await runGeneration(checkDeps(adapter, composer), jobId, replaying);
-      expect(adapter.submits.map((s) => s.key)).toEqual([`${jobId}:left`, `${jobId}:group`, retryKey(jobId)]);
-      expect(composer.checks).toHaveLength(0);
-      expect(composer.calls[0]!.segments.map((s) => s.key)).toEqual([
-        `jobs/${jobId}/1.mp4`,
-        'assets/demo/base-right.mp4',
-        `jobs/${jobId}/2.mp4`,
-      ]);
-      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
-    });
-
-    it("config validation: assets/ original, faces mapping this segment's slots to 0–1 points, bounded threshold and retries, reruns count toward the job cap", () => {
+    it("config validation: assets/ original, faces mapping this segment's slots to 0–1 points, bounded threshold, segments within the job cap", () => {
       const withCheck =
         (check: Record<string, unknown>, extra: object = {}) =>
         () =>
@@ -961,8 +864,7 @@ describe('effect compose', () => {
           ]);
       expect(withCheck({})).not.toThrow();
       expect(withCheck({ maxSimilarity: 1.2 })).toThrow(/maxSimilarity/);
-      expect(withCheck({ retries: 5 }, { maxCost: '5.00' })).toThrow(/retries/);
-      expect(withCheck({}, { maxCost: '0.80' })).toThrow(/exceeds/);
+      expect(withCheck({}, { maxCost: '0.79' })).toThrow(/exceeds/);
       expect(withCheck({ original: 'https://cdn.example/left.mp4' })).toThrow(/check.original/);
       expect(withCheck({ original: 'assets/../secret.mp4' })).toThrow(/check.original/);
       expect(withCheck({ faces: {} })).toThrow(/check.faces/);

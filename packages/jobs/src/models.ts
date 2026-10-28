@@ -77,8 +77,7 @@ export interface EffectSegment {
   cuts?: readonly number[];
   /**
    * Output check (needs effect.compose): for each filled slot listed in faces, look for the original person's face in the output.
-   * If any of them is still there (face similarity ≥ maxSimilarity) the swap didn't take, so rerun this segment up to retries times;
-   * still not swapped fails the whole job with a refund.
+   * If any of them is still there (face similarity ≥ maxSimilarity) the swap didn't take: the whole job fails with a refund, no rerun.
    */
   check?: EffectCheck;
 }
@@ -93,7 +92,6 @@ export interface EffectCheck {
   faces: Readonly<Record<string, FacePoint>>;
   /** Face similarity (cosine, 0–1) at or above which a slot still shows the original person. */
   maxSimilarity: number;
-  retries: number;
 }
 
 export type FacePoint = readonly [number, number] | readonly [number, number, number];
@@ -184,12 +182,9 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
   if (effect.prep && !(cents(effect.prep.maxCost) > 0))
     throw new Error(`model ${modelId}: prep needs a positive maxCost`);
   const prepCount = effect.prep ? effect.slots.filter((slot) => slot.prep).length : 0;
-  // Segments with an output check may rerun, so count them as up to 1 + retries runs; a slow prep may run twice (runner PREP_HEDGE_MS).
+  // A slow prep may run twice (runner PREP_HEDGE_MS).
   const total =
-    effect.segments.reduce(
-      (sum, segment) => sum + cents(segment.maxCost) * (1 + (segment.check?.retries ?? 0)),
-      0,
-    ) +
+    effect.segments.reduce((sum, segment) => sum + cents(segment.maxCost), 0) +
     prepCount * 2 * (effect.prep ? cents(effect.prep.maxCost) : 0);
   if (effect.segments.some((segment) => !(cents(segment.maxCost) > 0)))
     throw new Error(`model ${modelId}: every segment needs a positive maxCost`);
@@ -240,8 +235,6 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
       );
     if (!(check.maxSimilarity > 0 && check.maxSimilarity < 1))
       throw new Error(`model ${modelId}: segment ${segment.id} check.maxSimilarity must be between 0 and 1`);
-    if (!(Number.isInteger(check.retries) && check.retries >= 0 && check.retries <= 3))
-      throw new Error(`model ${modelId}: segment ${segment.id} check.retries must be 0–3`);
   }
   for (const slot of effect.slots) {
     if (!effect.segments.some((segment) => segment.slots.includes(slot.id)))

@@ -56,13 +56,12 @@ const lead = {
   target: 6.292,
   fit: 'trim' as const,
   base: 'assets/tinydesk/lead-original-6s.mp4',
-  // Output check: if the original lead's face is still in the first 6.292 s used (face similarity ≥ 0.6), treat as not swapped and retry once
+  // Output check: if the original lead's face is still in the first 6.292 s used (face similarity ≥ 0.6), the job fails with a refund
   // (tested: missed swaps score 0.87–0.97, swapped people stay under 0.4).
   check: {
     original: 'assets/tinydesk/lead-original-7s.mp4',
     faces: { lead: [0.79, 0.33] as const },
     maxSimilarity: 0.6,
-    retries: 1,
   },
 };
 

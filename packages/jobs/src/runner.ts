@@ -109,7 +109,6 @@ export async function runGeneration(deps: RunnerDeps, jobId: string, step: StepR
 
 interface SegmentCheck {
   maxSimilarity: number;
-  retries: number;
   /** Missing on checks cached by older versions (per-second SSIM): those jobs are delivered unchecked. */
   original?: string;
   faces?: Readonly<Record<string, FacePoint>>;
@@ -204,7 +203,6 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
             segment.id,
             {
               maxSimilarity: segment.check!.maxSimilarity,
-              retries: segment.check!.retries,
               original: segment.check!.original,
               faces: segment.check!.faces,
               // trim segments only put the first target seconds into the output, not rounded: comparing more would include the next shot that gets cut, less would miss the last frames.
@@ -386,102 +384,52 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       if (polled.hedge.length === 0) await step.sleep(`pause:prep:${attempt}`, POLL_PAUSE_MS);
     }
   };
-  /** Rerun upstream task IDs go after all segments, appended in rerun order. */
-  let retrySlots = 0;
   /**
-   * Output check: if an original person this segment should replace is still in the output (swap didn't take) rerun this segment;
-   * if reruns run out and it still didn't take, fail the whole job with a refund. Only slots the user filled are checked: the others keep the original on purpose.
+   * Output check: if an original person this segment should replace is still in the output (swap didn't take), fail the whole job with a refund.
+   * No rerun: a video render costs dollars, so a missed swap is refunded rather than paid for twice.
+   * Only slots the user filled are checked: the others keep the original on purpose.
    * Errors in the check itself (container failure, unreadable output) fail the job with a refund: an unchecked video may be the original clip,
    * and refunding one good video costs less than charging for a broken one. Returns false if the job has ended.
    */
   const verify = async (partId: string, index: number, check: SegmentCheck): Promise<boolean> => {
     const { original, faces } = check;
-    for (let round = 0; ; round++) {
-      const key = partKeys.get(partId);
-      if (!key) return true;
-      // Old-format checks still go through this loop: rounds an older version already ran replay from cache (with their scores,
-      // reruns and stored outputs, so output numbering stays the same); rounds not run yet pass, since the old check no longer exists.
-      const verdict = await step
-        .do(`check:${partId}:${round}`, async () => {
-          const job = await loadJob(deps.db, jobId);
-          if (!job || TERMINAL.includes(job.status)) return { stopped: true as const };
-          if (!original || !faces) return { scores: [] as number[] };
-          const model = deps.models.find((m) => m.id === job.modelId)!;
-          // Parts stored by older versions don't record their slots: check none rather than flag slots the user left as the original.
-          const points = (partsOf(job, model)[index]!.slots ?? [])
-            .map((slot) => faces[slot])
-            .filter((point): point is FacePoint => Boolean(point));
-          if (!deps.composer || points.length === 0) return { scores: [] as number[] };
-          const scores = await deps.composer.faces({
-            jobId,
-            key,
-            originalKey: original,
-            points,
-            seconds: check.seconds,
-          });
-          return { scores };
-        })
-        .catch((error: unknown) => {
-          deps.log?.('swap check errored', { jobId, part: partId, error: String(error) });
-          return { errored: String(error) };
-        });
-      if ('stopped' in verdict) return false;
-      if ('errored' in verdict) {
-        await fail('check_failed', `${partId} output could not be checked: ${verdict.errored}`.slice(0, 500));
-        return false;
-      }
-      const worst = Math.max(0, ...verdict.scores);
-      if (worst < check.maxSimilarity) return true;
-      deps.log?.('swap not applied', { jobId, part: partId, round, scores: verdict.scores });
-      if (round >= check.retries) {
-        await fail('swap_not_applied', `${partId} still shows an original face (similarity ${worst})`);
-        return false;
-      }
-      const slot = partIds.length + retrySlots++;
-      const label = `${partId}:retry${round + 1}`;
-      const submitted = await step.do(`submit:${label}`, async () => {
+    const key = partKeys.get(partId);
+    if (!key) return true;
+    // Step name keeps the old round suffix so in-flight jobs replay their cached check.
+    const verdict = await step
+      .do(`check:${partId}:0`, async () => {
         const job = await loadJob(deps.db, jobId);
-        if (!job || TERMINAL.includes(job.status)) return { done: true as const };
-        const existing = upstreamIds(job)[slot];
-        if (existing) return { upstreamJobId: existing };
-        if (Date.now() > deadline) return { timeout: true as const };
-        try {
-          const { upstreamJobId } = await adapter.submit(submitInput(job, index), `${jobId}:${label}`);
-          if (!(await appendUpstreamJob(deps.db, jobId, slot, upstreamJobId))) {
-            await adapter.cancel(upstreamJobId).catch(() => undefined);
-            return { done: true as const };
-          }
-          return { upstreamJobId };
-        } catch (error) {
-          if (error instanceof UpstreamError && !error.retryable) {
-            deps.log?.('upstream rejected retry', { jobId, part: label, code: error.code });
-            await cancelAll(adapter, upstreamIds(job));
-            await markFailed(deps.db, jobId, 'failed', error.code, error.message);
-            return { done: true as const };
-          }
-          throw error;
-        }
+        if (!job || TERMINAL.includes(job.status)) return { stopped: true as const };
+        if (!original || !faces) return { scores: [] as number[] };
+        const model = deps.models.find((m) => m.id === job.modelId)!;
+        // Parts stored by older versions don't record their slots: check none rather than flag slots the user left as the original.
+        const points = (partsOf(job, model)[index]!.slots ?? [])
+          .map((slot) => faces[slot])
+          .filter((point): point is FacePoint => Boolean(point));
+        if (!deps.composer || points.length === 0) return { scores: [] as number[] };
+        const scores = await deps.composer.faces({
+          jobId,
+          key,
+          originalKey: original,
+          points,
+          seconds: check.seconds,
+        });
+        return { scores };
+      })
+      .catch((error: unknown) => {
+        deps.log?.('swap check errored', { jobId, part: partId, error: String(error) });
+        return { errored: String(error) };
       });
-      if ('done' in submitted) return false;
-      if ('timeout' in submitted) {
-        await timeOut();
-        return false;
-      }
-      const result = await pollUntilDone(submitted.upstreamJobId, label);
-      if (result.state === 'stopped') return false;
-      if (result.state === 'timeout') {
-        await timeOut();
-        return false;
-      }
-      if (result.state === 'failed') {
-        await fail(result.code, result.message);
-        return false;
-      }
-      const start = outputs.length;
-      const stored = await step.do(`store:${label}`, () => storeOutputs(deps, jobId, result.files, start));
-      if (stored[0]) partKeys.set(partId, stored[0].key);
-      outputs.push(...stored);
+    if ('stopped' in verdict) return false;
+    if ('errored' in verdict) {
+      await fail('check_failed', `${partId} output could not be checked: ${verdict.errored}`.slice(0, 500));
+      return false;
     }
+    const worst = Math.max(0, ...verdict.scores);
+    if (worst < check.maxSimilarity) return true;
+    deps.log?.('swap not applied', { jobId, part: partId, scores: verdict.scores });
+    await fail('swap_not_applied', `${partId} still shows an original face (similarity ${worst})`);
+    return false;
   };
 
   // Run prep segments first, then video segments (which use the prep results). Within a phase, submit one by one so segments render upstream in parallel, then poll in turn.
