@@ -14,6 +14,7 @@ import { identify, track } from '~/lib/track';
 import { m } from '~/paraglide/messages.js';
 import { openAccount } from '~/site/account';
 import { PhoneHandoff } from '~/site/phone-upload';
+import { photoTooSmall } from '~/site/photo-check';
 import { formatPrice, PricingLink } from '~/site/pricing';
 import { openSignIn } from '~/site/sign-in';
 import site from '../../site.config';
@@ -203,6 +204,11 @@ export function TinyDeskTool({
   async function onPick(slotId: string, file: File | undefined, via: 'picker' | 'drop') {
     if (!file) return;
     setUploadError(null);
+    if (await photoTooSmall(file)) {
+      track('photo_too_small', { via });
+      setUploadError(m.common_tool_photo_small());
+      return;
+    }
     setUploading(slotId);
     try {
       const path = await uploadReference(file);

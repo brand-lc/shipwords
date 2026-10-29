@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { renderSVG } from 'uqr';
 import { track } from '~/lib/track';
 import { m } from '~/paraglide/messages.js';
+import { photoTooSmall } from '~/site/photo-check';
 
 // Upload photos from a phone by QR code (server side in handoff.server.ts).
 // Desktop: a line under the stage ("Photos on your phone? Scan to upload") opens a QR code; photos from the phone fill empty slots in order, and one scan covers the session.
@@ -169,7 +170,7 @@ export function PhoneHandoff({ place }: { place: (paths: string[]) => number }) 
   );
 }
 
-type Sent = { id: number; preview: string; status: 'sending' | 'sent' | 'failed' };
+type Sent = { id: number; preview: string; status: 'sending' | 'sent' | 'failed' | 'small' };
 
 const MAX_SIDE = 2048;
 
@@ -223,6 +224,10 @@ export function PhoneUploadPage({ token }: { token: string }) {
     // Upload one at a time: desktop fills slots in registration order, which must match the user's selection.
     for (const { file, id } of batch) {
       try {
+        if (await photoTooSmall(file)) {
+          update(id, 'small');
+          continue;
+        }
         const blob = await shrink(file);
         const path = await uploadReference(new File([blob], file.name, { type: blob.type || file.type }));
         const response = await fetch(`/api/handoff/${token}`, {
@@ -271,10 +276,14 @@ export function PhoneUploadPage({ token }: { token: string }) {
           {sent.some((item) => item.status === 'failed') && (
             <p className="error">{m.common_phone_failed()}</p>
           )}
+          {sent.some((item) => item.status === 'small') && <p className="error">{m.common_phone_small()}</p>}
           {sent.length > 0 && (
             <ul className="phone-sent">
               {sent.map((item) => (
-                <li key={item.id} className={`phone-thumb phone-thumb-${item.status}`}>
+                <li
+                  key={item.id}
+                  className={`phone-thumb phone-thumb-${item.status === 'small' ? 'failed' : item.status}`}
+                >
                   <img src={item.preview} alt="" />
                 </li>
               ))}

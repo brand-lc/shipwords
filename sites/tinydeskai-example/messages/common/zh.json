@@ -97,6 +97,7 @@
   "common_preset_back": "只换后排",
   "common_tool_upload_failed": "上传失败",
   "common_tool_file_type": "请用 PNG、JPG 或 WebP 格式的照片",
+  "common_tool_photo_small": "这张照片太小，换不了脸。请换一张更大、清晰的正脸照。",
   "common_tool_legend": "点一位乐队成员，换上照片",
   "common_tool_swap": "替换{member}",
   "common_tool_new": "新{member}",
@@ -186,5 +187,6 @@
   "common_phone_sending": "正在传…",
   "common_phone_sent": "已传 {count} 张 · 去电脑上看",
   "common_phone_failed": "有一张没传上，再选一次。",
+  "common_phone_small": "有张照片太小，换不了脸。请换一张更大的。",
   "common_phone_expired": "链接过期了，在电脑上换个新二维码再扫。"
 }

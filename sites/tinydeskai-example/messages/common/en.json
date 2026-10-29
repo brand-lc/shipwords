@@ -97,6 +97,7 @@
   "common_preset_back": "Back row only",
   "common_tool_upload_failed": "Upload failed",
   "common_tool_file_type": "Use a PNG, JPG or WebP photo",
+  "common_tool_photo_small": "This photo is too small for a face swap. Use a larger, clear, front-facing photo.",
   "common_tool_legend": "Tap a band member to swap in a photo",
   "common_tool_swap": "Swap {member}",
   "common_tool_new": "New {member}",
@@ -186,5 +187,6 @@
   "common_phone_sending": "Sending…",
   "common_phone_sent": "{count} sent · check your computer",
   "common_phone_failed": "A photo didn't make it. Pick it again.",
+  "common_phone_small": "A photo is too small for a face swap. Pick a larger one.",
   "common_phone_expired": "This link expired. Get a new code on your computer and scan again."
 }
