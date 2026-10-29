@@ -225,6 +225,7 @@ export function PhoneUploadPage({ token }: { token: string }) {
     for (const { file, id } of batch) {
       try {
         if (await photoTooSmall(file)) {
+          track('photo_too_small', { via: 'phone' });
           update(id, 'small');
           continue;
         }
