@@ -136,6 +136,10 @@ pnpm lint && pnpm test:tools
 - [AI 编程 Agent 规则](AGENTS.md)
 - [贡献指南](CONTRIBUTING.md) 与 [安全政策](SECURITY.md)
 
+## 社区
+
+提问、想法和你上线的站，发到 [GitHub Discussions](https://github.com/shipwords-dev/shipwords/discussions)：[Q&A](https://github.com/shipwords-dev/shipwords/discussions/categories/q-a)、[Show and tell](https://github.com/shipwords-dev/shipwords/discussions/categories/show-and-tell)、[Ideas](https://github.com/shipwords-dev/shipwords/discussions/categories/ideas)。Bug 请提 [Issues](https://github.com/shipwords-dev/shipwords/issues)。
+
 ## 许可
 
 [MIT](LICENSE)

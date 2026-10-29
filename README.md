@@ -136,6 +136,10 @@ pnpm lint && pnpm test:tools
 - [Rules for AI coding agents](AGENTS.md)
 - [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
 
+## Community
+
+Questions, ideas and sites you shipped go in [GitHub Discussions](https://github.com/shipwords-dev/shipwords/discussions): [Q&A](https://github.com/shipwords-dev/shipwords/discussions/categories/q-a), [Show and tell](https://github.com/shipwords-dev/shipwords/discussions/categories/show-and-tell), [Ideas](https://github.com/shipwords-dev/shipwords/discussions/categories/ideas). Bugs go in [Issues](https://github.com/shipwords-dev/shipwords/issues).
+
 ## License
 
 [MIT](LICENSE)
