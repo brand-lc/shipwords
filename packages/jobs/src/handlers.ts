@@ -5,6 +5,7 @@ import { consumeQuota, dayWindow, releaseQuota } from '@shipwords/core/quota/cou
 import { ensureGuestId, readGuestId } from '@shipwords/core/quota/guest';
 import type { Core } from '@shipwords/core/server';
 import { and, desc, eq, isNull } from 'drizzle-orm';
+import { imageSize } from './image-size';
 import {
   claimGuestJobs,
   loadJob,
@@ -23,6 +24,8 @@ const MAX_PROMPT = 4000;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const UPLOAD_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const UPLOADS_PER_DAY = 40;
+/** Shorter side below this and models can't pick out a face or subject; a failed face swap still costs the upstream in full. */
+const MIN_UPLOAD_SIDE = 160;
 const RECAPTCHA_ACTION = 'generate';
 
 interface CreateBody {
@@ -296,6 +299,15 @@ export function createJobs(core: Core, models: readonly ModelDefinition[]) {
       if (!length || length > MAX_UPLOAD_BYTES) return errorResponse(413, 'too_large');
       const bytes = await request.arrayBuffer();
       if (bytes.byteLength > MAX_UPLOAD_BYTES) return errorResponse(413, 'too_large');
+      const size = imageSize(bytes);
+      if (!size) return errorResponse(415, 'invalid_image', 'This file is not a readable image.');
+      if (Math.min(size.width, size.height) < MIN_UPLOAD_SIDE) {
+        return errorResponse(422, 'image_too_small', 'This photo is too small. Use a larger, clearer one.', {
+          width: size.width,
+          height: size.height,
+          minSide: MIN_UPLOAD_SIDE,
+        });
+      }
       const ext = type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg';
       const key = `uploads/${newId('up')}.${ext}`;
       await env().OUTPUTS.put(key, bytes, { httpMetadata: { contentType: type } });
