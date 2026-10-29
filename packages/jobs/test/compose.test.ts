@@ -302,6 +302,8 @@ describe('repair planning', () => {
       [360, 425],
     ]);
     expect(shotFrames([2, 4], 6, 24, [2, 1])).toEqual([[48, 144]]);
+    // Compose rounds each shot on its own (24, 24, 23 frames), not the cut times (24, 49, 72).
+    expect(shotFrames([1.02, 2.04], 3, 24, [2])).toEqual([[48, 71]]);
   });
 
   it('whole frame with every filled person in the shots first, the box after that, whole frame again without a box', () => {

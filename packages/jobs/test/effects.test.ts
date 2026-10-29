@@ -1129,6 +1129,21 @@ describe('effect compose', () => {
       }
     });
 
+    it('the check of a repaired video errors: check_failed, the original render is never delivered, refunded', async () => {
+      const { userId, jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      composer.scores = [[0.3, 0.8, 0.2]];
+      const faces = composer.faces.bind(composer);
+      composer.faces = async (input) => {
+        if (input.key.includes('repair')) throw new Error('container cold');
+        return faces(input);
+      };
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'check_failed' });
+      expect(adapter.submits).toHaveLength(2);
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
     it('without a public file URL a missed swap is refunded as before, with no repair', async () => {
       const { userId, jobId, adapter } = await repairJob();
       const composer = new FakeComposer();

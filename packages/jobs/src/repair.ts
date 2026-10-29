@@ -36,7 +36,8 @@ export function nextRepairPass(
 
 /**
  * Frame ranges [start, end) of the given shots in the final cut, adjacent shots merged.
- * Shot i runs from cut i - 1 (0 for the first) to cut i (target for the last).
+ * Shot i runs from cut i - 1 (0 for the first) to cut i (target for the last). Compose rounds each shot's length to frames on its own
+ * (splitAtCuts, buildFfmpegArgs), so the bounds add those up rather than rounding each cut time.
  */
 export function shotFrames(
   cuts: readonly number[],
@@ -44,7 +45,10 @@ export function shotFrames(
   fps: number,
   shots: readonly number[],
 ): [number, number][] {
-  const bounds = [0, ...cuts, target].map((seconds) => Math.round(seconds * fps));
+  const times = [0, ...cuts, target];
+  const bounds = [0];
+  for (let i = 1; i < times.length; i++)
+    bounds.push(bounds[i - 1]! + Math.round((times[i]! - times[i - 1]!) * fps));
   const ranges: [number, number][] = [];
   for (const shot of [...shots].sort((a, b) => a - b)) {
     const start = bounds[shot]!;
