@@ -90,6 +90,12 @@ Deploy only from main. Afterwards, check Workers Logs and the provider's webhook
 
 ## 8. Search and analytics
 
+- Run `node tools/check-crawl.mjs https://<domain> "a product fact visible in the page body"` from the engine root after deployment. From a parent repository use its `vendor/shipwords/tools/check-crawl.mjs` path. The read-only smoke check requests home, robots and sitemap with four UAs, checks HTTP status, canonical, indexing directives, SSR text and JSON-LD video dates, and exits nonzero on failures. It does not execute JavaScript. Supply stable product phrases to detect an empty client-only shell. Test fixtures run with `pnpm test:tools`.
+- Review the printed robots groups manually (including crawler-specific groups); the smoke check is not a robots policy evaluator or a full XML validator. Check every sitemap URL separately. Inspect HTTPS/www redirects, public DNS via DoH when local DNS is proxied, and repeat from independent networks. A UA string does not impersonate a verified crawler's IP or prove global reachability.
+- In GSC, inspect the home URL: record indexed status, last crawl, crawl success, declared and Google-selected canonical, then run a live test. Inspect Bing separately: its index can lag Google. Record the actual reporting dates and distinguish property-level impressions from page totals. Search-result absence alone does not prove exclusion.
+- If a fetch fails, inspect Cloudflare AI Crawl Control, WAF, challenge settings, cache rules and failed request paths before changing anything. Errors on scanner paths are not evidence that public pages fail. Do not disable protections to compensate for an unexplained tool error.
+- Keep `llms.txt` consistent with the public product, but do not treat it as an indexing or ranking requirement. Google [does not use llms.txt for Search visibility or ranking](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide). Fix concrete markup warnings using recorded publication dates, not invented timestamps, reviews or ratings.
+
 - **Google Search Console:** add the domain property (DNS verification through Cloudflare is quickest) and submit `https://<domain>/sitemap.xml`.
 - **Bing Webmaster Tools:** import from GSC or add the site, and submit the same sitemap.
 - **IndexNow:** generate a key, put `<key>.txt` containing the key into `public/`, deploy, then submit new URLs to `https://api.indexnow.org/indexnow`. Bing and other IndexNow engines pick them up quickly.

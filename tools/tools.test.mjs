@@ -4,11 +4,75 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { checkCrawl, inspectHtml } from './check-crawl.mjs';
 import { checkSite } from './check-site.mjs';
 import { isWorktree, portFor } from './dev-port.mjs';
 import { readSiteConfig, readStatus, setVar, TOOLS_ROOT } from './lib.mjs';
 import { createSite, parseArgs, validateSlug } from './new-site.mjs';
 import { listenArgs, parseVars } from './stripe-listen.mjs';
+
+const crawlHtml = `<html><head><title>Photo studio</title><meta content="Make a video" name="description"><link href="https://example.com" rel="canonical"></head><body><h1>Photo studio</h1><p>One photo. $9.98.</p><script type="application/ld+json">{"@type":"VideoObject","uploadDate":"2026-10-27T15:02:46Z"}</script></body></html>`;
+
+test('crawl: checks real HTML text, canonical, robot directives and video dates', () => {
+  assert.deepEqual(inspectHtml(crawlHtml, 'https://example.com/', new Headers(), ['One photo']), []);
+  assert.match(
+    inspectHtml(crawlHtml.replace('2026-10-27T15:02:46Z', '2026-10-27'), 'https://example.com/').join(),
+    /datetime/,
+  );
+  assert.match(
+    inspectHtml(
+      crawlHtml.replace('https://example.com', 'https://template.example'),
+      'https://example.com/',
+    ).join(),
+    /Canonical/,
+  );
+  assert.match(
+    inspectHtml(crawlHtml, 'https://example.com/', new Headers({ 'x-robots-tag': 'noindex' })).join(),
+    /blocks indexing/,
+  );
+  assert.match(
+    inspectHtml(
+      crawlHtml.replace('</head>', '<meta name="Googlebot" content="none"></head>'),
+      'https://example.com/',
+    ).join(),
+    /blocks indexing/,
+  );
+  const shell = crawlHtml.replace(
+    '<h1>Photo studio</h1><p>One photo. $9.98.</p>',
+    '<script>"<h1>Photo studio</h1> One photo"</script>',
+  );
+  assert.match(
+    inspectHtml(shell, 'https://example.com/', new Headers(), ['One photo']).join(),
+    /Missing SSR H1.*Missing SSR text/,
+  );
+  assert.match(
+    inspectHtml(crawlHtml.replace('"VideoObject"', 'invalid'), 'https://example.com/').join(),
+    /Invalid JSON-LD/,
+  );
+});
+
+test('crawl: bounded UA matrix detects challenge, redirect and foreign sitemap', async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith('robots.txt'))
+      return new Response('User-agent: *\nDisallow: /api/\nSitemap: https://example.com/sitemap.xml');
+    if (url.endsWith('sitemap.xml'))
+      return new Response(
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://wrong.example/</loc></url></urlset>',
+      );
+    if (options.headers['user-agent'].includes('Googlebot'))
+      return new Response('Challenge', { status: 403, headers: { 'cf-mitigated': 'challenge' } });
+    return new Response('', { status: 301, headers: { location: 'https://wrong.example/' } });
+  };
+  const results = await checkCrawl('https://example.com', [], fakeFetch);
+  assert.equal(calls.length, 12);
+  assert.ok(calls.every((call) => call.options.redirect === 'manual'));
+  assert.ok(results.some((r) => r.errors.includes('Cloudflare challenge')));
+  assert.ok(results.some((r) => r.errors.includes('HTTP 301')));
+  assert.ok(results.some((r) => r.errors.some((e) => e.startsWith('Foreign sitemap'))));
+  await assert.rejects(checkCrawl('https://example.com/path', [], fakeFetch), /HTTPS origin/);
+});
 
 test('dev port: main checkout keyed by site name, worktrees by path', () => {
   assert.equal(portFor('/a/shipwords/sites/x', false), portFor('/b/elsewhere/sites/x', false));
