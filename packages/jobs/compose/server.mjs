@@ -5,18 +5,25 @@
 // GET  /files/<id>/song.mp4 | /files/<id>/silent.mp4  read results.
 // POST /faces  multipart: video (model output), original (unmasked clip of the shot), seconds, points (JSON [[x, y], ...]).
 //   Returns { similarity: [...] }: per point, how closely any face in the output matches the original person there (faces.py). Read-only.
+// POST /extract  multipart: manifest (JSON: { ranges: [[start, end), ...] frames, crop?: [x, y, w, h], width, height, fps }), video.
+//   Returns those frames joined into one silent MP4 (the box only, scaled up, with crop): the input of a repair pass. Read-only.
+// POST /patch  multipart: manifest (as extract plus id), video, patch (the repaired clip). Returns video with the repaired frames
+//   put back; results also stay in /tmp/compose/<id>/ (song.mp4, silent.mp4) like compose.
 // Repeating compose with the same id overwrites the same files, so Workflow retries are idempotent.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   buildCutArgs,
+  buildExtractArgs,
   buildFfmpegArgs,
+  buildPatchArgs,
   buildSilentArgs,
+  checkRanges,
   matchCuts,
   parseCutTimes,
   parsePoints,
@@ -131,6 +138,66 @@ async function faces(req) {
   }
 }
 
+async function formOf(req) {
+  return new Request('http://local/', {
+    method: 'POST',
+    headers: req.headers,
+    body: req,
+    duplex: 'half',
+  }).formData();
+}
+
+function cutSpec(manifest) {
+  const { width, height, fps } = manifest;
+  if (![width, height, fps].every((value) => Number.isInteger(value) && value > 0 && value <= 4096))
+    throw new Error('bad size');
+  return { ranges: checkRanges(manifest.ranges), crop: manifest.crop, width, height, fps };
+}
+
+async function extract(req) {
+  const form = await formOf(req);
+  const spec = cutSpec(JSON.parse(String(form.get('manifest') ?? '{}')));
+  const dir = join('/tmp/extract', randomUUID());
+  await mkdir(dir, { recursive: true });
+  try {
+    const input = join(dir, 'video.mp4');
+    const output = join(dir, 'clip.mp4');
+    await save(form, 'video', input);
+    await run('ffmpeg', buildExtractArgs({ ...spec, input, output }));
+    return await readFile(output);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function patch(req) {
+  const form = await formOf(req);
+  const manifest = JSON.parse(String(form.get('manifest') ?? '{}'));
+  if (!ID.test(manifest.id ?? '')) throw new Error('bad id');
+  const spec = cutSpec(manifest);
+  const dir = join(ROOT, manifest.id);
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(dir, { recursive: true });
+  const video = join(dir, 'in.mp4');
+  const patchFile = join(dir, 'patch.mp4');
+  await save(form, 'video', video);
+  await save(form, 'patch', patchFile);
+  const song = join(dir, 'song.mp4');
+  await run(
+    'ffmpeg',
+    buildPatchArgs({
+      ...spec,
+      video,
+      frames: Math.round((await durationOf(video)) * spec.fps),
+      patch: patchFile,
+      patchDuration: await durationOf(patchFile),
+      output: song,
+    }),
+  );
+  await run('ffmpeg', buildSilentArgs(song, join(dir, 'silent.mp4')));
+  return song;
+}
+
 function sendFile(res, file, size) {
   res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': size });
   createReadStream(file).pipe(res);
@@ -140,6 +207,14 @@ createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && req.url === '/compose') {
       const song = await compose(req);
+      return sendFile(res, song, (await stat(song)).size);
+    }
+    if (req.method === 'POST' && req.url === '/extract') {
+      const clip = await extract(req);
+      return res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': clip.length }).end(clip);
+    }
+    if (req.method === 'POST' && req.url === '/patch') {
+      const song = await patch(req);
       return sendFile(res, song, (await stat(song)).size);
     }
     if (req.method === 'POST' && req.url === '/faces') {

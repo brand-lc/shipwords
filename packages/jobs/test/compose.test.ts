@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildExtractArgs,
   buildFfmpegArgs,
+  buildPatchArgs,
   buildSilentArgs,
+  checkRanges,
+  cropPixels,
   matchCuts,
   parseCutTimes,
   parsePoints,
   splitAtCuts,
 } from '../compose/compose.mjs';
+import { nextRepairPass, shotFrames } from '../src/repair';
 
 // ffmpeg itself runs in the container; here we only check args: retime ratio, frame-count cut, concat order, optional audio.
 describe('compose args', () => {
@@ -168,5 +173,152 @@ describe('output check points', () => {
       expect(() => parsePoints(bad)).toThrow();
     }
     expect(() => parsePoints('not json')).toThrow();
+  });
+});
+
+// Ran against real ffmpeg on a composed 720×1280 clip with a tinted 25 fps 768-wide stand-in for the model output: 425 frames out,
+// repaired frames exactly inside the ranges, poses lined up, audio kept. Here only the args.
+describe('repair args', () => {
+  const ranges: [number, number][] = [
+    [0, 128],
+    [360, 425],
+  ];
+
+  it('extract: one input per range trimmed by frame, joined, no audio; crop cuts the box in even pixels and scales it to full width', () => {
+    const args = buildExtractArgs({ input: 'in.mp4', ranges, width: 720, height: 1280, output: 'clip.mp4' });
+    const graph = args[args.indexOf('-filter_complex') + 1]!;
+    expect(args.filter((arg) => arg === 'in.mp4')).toHaveLength(2);
+    expect(graph).toBe(
+      '[0:v]trim=start_frame=0:end_frame=128,setpts=PTS-STARTPTS[c0];' +
+        '[1:v]trim=start_frame=360:end_frame=425,setpts=PTS-STARTPTS[c1];[c0][c1]concat=n=2:v=1:a=0[v]',
+    );
+    expect(args).toContain('-an');
+    const cropped = buildExtractArgs({
+      input: 'in.mp4',
+      ranges,
+      crop: [0, 0, 0.444, 0.3875],
+      width: 720,
+      height: 1280,
+      output: 'clip.mp4',
+    });
+    expect(cropped[cropped.indexOf('-filter_complex') + 1]).toContain(
+      'concat=n=2:v=1:a=0,crop=320:496:0:0,scale=720:-2[v]',
+    );
+  });
+
+  it('patch: the clip is retimed to the ranges, split back in order between kept frames, audio copied from the video', () => {
+    const args = buildPatchArgs({
+      video: 'in.mp4',
+      frames: 425,
+      patch: 'out.mp4',
+      patchDuration: 8.2,
+      ranges,
+      width: 720,
+      height: 1280,
+      fps: 24,
+      output: 'song.mp4',
+    });
+    const graph = args[args.indexOf('-filter_complex') + 1]!;
+    // 193 frames = 8.041667 s at 24 fps, from an 8.2 s clip.
+    expect(graph).toContain('[1:v]setpts=0.980691*(PTS-STARTPTS),fps=24,scale=720:1280,setsar=1,');
+    expect(graph).toContain('trim=start_frame=0:end_frame=128,setpts=PTS-STARTPTS[p1]');
+    expect(graph).toContain('[2:v]trim=start_frame=128:end_frame=360,setpts=PTS-STARTPTS[b2]');
+    expect(graph).toContain('trim=start_frame=128:end_frame=193,setpts=PTS-STARTPTS[p3]');
+    // The last range ends at the last frame: no empty tail piece.
+    expect(graph).toContain('[p1][b2][p3]concat=n=3:v=1:a=0,format=yuv420p[v]');
+    expect(args).toEqual(expect.arrayContaining(['-map', '0:a?', '-c:a', 'copy']));
+    expect(() => buildPatchArgs({ ...spec(), frames: 400 })).toThrow(/past the video/);
+  });
+
+  it('patch with a box: overlaid on the kept frames, feathered only on edges inside the frame', () => {
+    const graph = (crop: number[]) => {
+      const args = buildPatchArgs({ ...spec(), crop });
+      return args[args.indexOf('-filter_complex') + 1]!;
+    };
+    const corner = graph([0, 0, 0.444, 0.3875]);
+    expect(corner).toContain('scale=320:496');
+    expect(corner).toContain("a='255*min(1,min(min(48,(W-1-X)),min(48,(H-1-Y)))/48)'");
+    expect(corner).toContain('[b2][p1]overlay=0:0[op1]');
+    expect(graph([0.25, 0.25, 0.5, 0.5])).toContain("a='255*min(1,min(min(X,(W-1-X)),min(Y,(H-1-Y)))/48)'");
+  });
+
+  it('rejects bad ranges and boxes', () => {
+    expect(
+      checkRanges([
+        [0, 10],
+        [10, 20],
+      ]),
+    ).toEqual([
+      [0, 10],
+      [10, 20],
+    ]);
+    for (const bad of [
+      [],
+      [[5, 5]],
+      [
+        [10, 20],
+        [5, 8],
+      ],
+      [[0, 1.5]],
+      [[-1, 3]],
+      'x',
+      Array(11).fill([0, 1]),
+    ])
+      expect(() => checkRanges(bad)).toThrow();
+    expect(cropPixels([0.9, 0.9, 0.2, 0.2], 720, 1280)).toEqual({ x: 648, y: 1152, w: 72, h: 128 });
+    for (const bad of [[0, 0, 0, 0.5], [0, 0, 1.2, 0.5], [0, 0, 0.5], 'x'])
+      expect(() => cropPixels(bad, 720, 1280)).toThrow();
+  });
+
+  function spec() {
+    return {
+      video: 'in.mp4',
+      frames: 425,
+      patch: 'out.mp4',
+      patchDuration: 8.2,
+      ranges,
+      width: 720,
+      height: 1280,
+      fps: 24,
+      output: 'song.mp4',
+    };
+  }
+});
+
+describe('repair planning', () => {
+  const repair = {
+    upstreamModel: 'm',
+    prompt: () => '',
+    parameters: {},
+    maxCost: '0.1',
+    rounds: 3,
+    shots: [['front', 'edge'], ['solo'], ['front', 'edge']],
+    crops: { edge: [0, 0, 0.4, 0.4] as const },
+  };
+
+  it('shot frames: final-cut shot times to frame ranges, adjacent shots merged', () => {
+    expect(shotFrames([5.333, 11.625, 15], 17.688, 24, [0, 3])).toEqual([
+      [0, 128],
+      [360, 425],
+    ]);
+    expect(shotFrames([2, 4], 6, 24, [2, 1])).toEqual([[48, 144]]);
+  });
+
+  it('whole frame with every filled person in the shots first, the box after that, whole frame again without a box', () => {
+    const filled = ['front', 'edge', 'solo'];
+    const first = nextRepairPass(repair, filled, ['edge'], []);
+    expect(first).toEqual({ slots: ['front', 'edge'], shots: [0, 2] });
+    expect(nextRepairPass(repair, filled, ['edge'], [first!])).toEqual({
+      slots: ['edge'],
+      shots: [0, 2],
+      crop: [0, 0, 0.4, 0.4],
+    });
+    expect(nextRepairPass(repair, filled, ['front'], [first!])).toEqual(first);
+    // Unfilled people stay as the original and get no photo.
+    expect(nextRepairPass(repair, ['edge', 'solo'], ['edge'], [])).toEqual({
+      slots: ['edge'],
+      shots: [0, 2],
+    });
+    expect(nextRepairPass(repair, filled, ['nobody'], [])).toBeNull();
   });
 });

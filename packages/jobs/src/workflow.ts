@@ -69,6 +69,7 @@ export function defineGenerationWorkflow(models: readonly ModelDefinition[], sit
     override async run(event: Readonly<WorkflowEvent<{ jobId: string }>>, step: WorkflowStep) {
       const env = this.env;
       const db = createDb(env.DB);
+      const baseURL = (env.APP_URL ?? site?.url)?.replace(/\/$/, '');
       try {
         await runGeneration(
           {
@@ -81,6 +82,8 @@ export function defineGenerationWorkflow(models: readonly ModelDefinition[], sit
               : env.COMPOSE
                 ? { composer: containerComposer(env.COMPOSE, env.OUTPUTS) }
                 : {}),
+            // Served by the site's /files route (handlers.ts file), the same origin the upload URLs use.
+            ...(baseURL ? { fileUrl: (key: string) => `${baseURL}/files/${key}` } : {}),
             ...(site && env.EMAIL && env.EMAIL_FROM
               ? {
                   notify: emailOnFinish({

@@ -80,6 +80,33 @@ export interface EffectSegment {
    * If any of them is still there (face similarity ≥ maxSimilarity) the swap didn't take: the whole job fails with a refund, no rerun.
    */
   check?: EffectCheck;
+  /**
+   * Repair (needs check and cuts, and compose with this as the only segment): when the check still finds original people, re-render the shots
+   * they appear in with a video replace model instead of refunding, then check again; after `rounds` passes the job fails with a refund.
+   */
+  repair?: EffectRepair;
+}
+
+/** A box as fractions of the frame: [x, y, width, height]. */
+export type CropBox = readonly [number, number, number, number];
+
+export interface EffectRepair {
+  /** Video replace model: gets the shots to repair as reference_video and the photos of the slots in that pass as reference_image (1–3). */
+  upstreamModel: string;
+  /** Instruction for one pass; slots are the people being replaced, in reference image order. */
+  prompt: (slots: readonly string[]) => string;
+  parameters: Readonly<Record<string, unknown>>;
+  /** Cost cap per pass (USD string). */
+  maxCost: string;
+  /** Most passes per job (1–5); every pass counts toward the model's maxCost. */
+  rounds: number;
+  /** Slots visible in each shot, one entry per shot (cuts split the segment into cuts.length + 1 shots); a pass on a slot covers every shot it is in. */
+  shots: readonly (readonly string[])[];
+  /**
+   * Slot → box around that person, for people at the frame edge the model passes over when the whole frame is repaired:
+   * after a whole-frame pass has missed them, the next pass repairs that box alone and blends it back.
+   */
+  crops?: Readonly<Record<string, CropBox>>;
 }
 
 export interface EffectCheck {
@@ -184,7 +211,13 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
   const prepCount = effect.prep ? effect.slots.filter((slot) => slot.prep).length : 0;
   // A slow prep may run twice (runner PREP_HEDGE_MS).
   const total =
-    effect.segments.reduce((sum, segment) => sum + cents(segment.maxCost), 0) +
+    effect.segments.reduce(
+      (sum, segment) =>
+        sum +
+        cents(segment.maxCost) +
+        (segment.repair ? segment.repair.rounds * cents(segment.repair.maxCost) : 0),
+      0,
+    ) +
     prepCount * 2 * (effect.prep ? cents(effect.prep.maxCost) : 0);
   if (effect.segments.some((segment) => !(cents(segment.maxCost) > 0)))
     throw new Error(`model ${modelId}: every segment needs a positive maxCost`);
@@ -236,9 +269,47 @@ function validateEffect(model: ModelDefinition, effect: EffectSpec) {
     if (!(check.maxSimilarity > 0 && check.maxSimilarity < 1))
       throw new Error(`model ${modelId}: segment ${segment.id} check.maxSimilarity must be between 0 and 1`);
   }
+  for (const segment of effect.segments) {
+    if (segment.repair) validateRepair(modelId, effect, segment, segment.repair);
+  }
   for (const slot of effect.slots) {
     if (!effect.segments.some((segment) => segment.slots.includes(slot.id)))
       throw new Error(`model ${modelId}: slot ${slot.id} is in no segment`);
+  }
+}
+
+function validateRepair(modelId: string, effect: EffectSpec, segment: EffectSegment, repair: EffectRepair) {
+  const where = `model ${modelId}: segment ${segment.id} repair`;
+  // The repaired frames are cut from the composed video by the final-cut shot times, and checked against the original over the same timeline.
+  if (!segment.check || !segment.cuts || !effect.compose || effect.segments.length !== 1)
+    throw new Error(`${where} needs check, cuts and compose with a single segment`);
+  if (!Number.isInteger(repair.rounds) || repair.rounds < 1 || repair.rounds > 5)
+    throw new Error(`${where}.rounds must be 1–5`);
+  if (!(Math.round(Number(repair.maxCost) * 100) > 0)) throw new Error(`${where} needs a positive maxCost`);
+  const shots = repair.shots;
+  if (
+    shots.length !== segment.cuts.length + 1 ||
+    shots.some((slots) => slots.some((slot) => !segment.slots.includes(slot)))
+  )
+    throw new Error(
+      `${where}.shots must list this segment's slots for each of its ${segment.cuts.length + 1} shots`,
+    );
+  for (const slot of Object.keys(segment.check.faces)) {
+    const seen = new Set(shots.filter((slots) => slots.includes(slot)).flat());
+    // One pass sends the photos of everyone in the shots it covers; the replace model takes at most 3.
+    if (seen.size === 0 || seen.size > 3)
+      throw new Error(
+        `${where}: checked slot ${slot} must be in some shot, with at most 3 people across its shots`,
+      );
+  }
+  for (const [slot, box] of Object.entries(repair.crops ?? {})) {
+    const [x, y, width, height] = box;
+    if (
+      !segment.slots.includes(slot) ||
+      box.length !== 4 ||
+      !(x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= 1 && y + height <= 1)
+    )
+      throw new Error(`${where}.crops must map this segment's slots to boxes inside the frame`);
   }
 }
 

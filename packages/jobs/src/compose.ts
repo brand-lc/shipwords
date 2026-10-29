@@ -2,7 +2,7 @@
 // The actual ffmpeg runs in Cloudflare Containers (image in packages/jobs/compose/); this side only
 // fetches files from R2, hands them to the container and stores the results.
 
-import type { FacePoint } from './models';
+import type { CropBox, FacePoint } from './models';
 
 export interface ComposeSegment {
   /** R2 key. */
@@ -36,6 +36,26 @@ export interface FacesInput {
   seconds: number;
 }
 
+export interface ExtractInput {
+  jobId: string;
+  /** Composed video (R2 key). */
+  key: string;
+  /** Frame ranges [start, end) to join, in order. */
+  ranges: [number, number][];
+  /** Cut this box out of the joined frames and scale it up to the full width. */
+  crop?: CropBox;
+  width: number;
+  height: number;
+  fps: number;
+}
+
+export interface PatchInput extends ExtractInput {
+  /** Container work name, unique per pass ([a-z0-9_-]). */
+  name: string;
+  /** Repaired clip (R2 key) from the frames extract gave the model, any size and frame rate. */
+  patchKey: string;
+}
+
 export interface Composer {
   /** Repeated calls with the same jobId give the same result, safe for Workflow retries. */
   compose(input: ComposeInput): Promise<{ song: ArrayBuffer; silent: ArrayBuffer }>;
@@ -44,6 +64,13 @@ export interface Composer {
    * High means the original person is still in the output (not swapped). Same order as points. Read-only, repeatable.
    */
   faces(input: FacesInput): Promise<number[]>;
+  /** Repair input: the frames of the given ranges joined into one silent clip (or a box of them). Read-only, repeatable. */
+  extract(input: ExtractInput): Promise<ArrayBuffer>;
+  /**
+   * Put a repaired clip back over the same frames: the clip is retimed to their length and scaled to the frame, or to the box with
+   * feathered inner edges; everything else, and the soundtrack, stays as it was. Returns with-track and silent versions. Repeatable.
+   */
+  patch(input: PatchInput): Promise<{ song: ArrayBuffer; silent: ArrayBuffer }>;
 }
 
 async function blobOf(bucket: R2Bucket, key: string): Promise<Blob> {
@@ -106,5 +133,31 @@ export function containerComposer(namespace: DurableObjectNamespace, bucket: R2B
         throw new Error('faces returned no scores');
       return similarity as number[];
     },
+    async extract(input) {
+      const form = new FormData();
+      form.set('manifest', JSON.stringify(cutManifest(input)));
+      form.set('video', await blobOf(bucket, input.key), 'video.mp4');
+      const stub = namespace.get(namespace.idFromName(input.jobId));
+      const response = await stub.fetch('http://compose/extract', { method: 'POST', body: form });
+      if (!response.ok) throw new Error(`extract failed: ${response.status} ${await response.text()}`);
+      return response.arrayBuffer();
+    },
+    async patch(input) {
+      const form = new FormData();
+      form.set('manifest', JSON.stringify({ ...cutManifest(input), id: input.name }));
+      form.set('video', await blobOf(bucket, input.key), 'video.mp4');
+      form.set('patch', await blobOf(bucket, input.patchKey), 'patch.mp4');
+      const stub = namespace.get(namespace.idFromName(input.jobId));
+      const response = await stub.fetch('http://compose/patch', { method: 'POST', body: form });
+      if (!response.ok) throw new Error(`patch failed: ${response.status} ${await response.text()}`);
+      const song = await response.arrayBuffer();
+      const silent = await stub.fetch(`http://compose/files/${input.name}/silent.mp4`);
+      if (!silent.ok) throw new Error(`patch silent copy failed: ${silent.status}`);
+      return { song, silent: await silent.arrayBuffer() };
+    },
   };
+}
+
+function cutManifest({ ranges, crop, width, height, fps }: ExtractInput) {
+  return { ranges, ...(crop ? { crop } : {}), width, height, fps };
 }

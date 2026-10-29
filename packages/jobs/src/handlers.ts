@@ -321,7 +321,7 @@ export function createJobs(core: Core, models: readonly ModelDefinition[]) {
     async file(_request: Request, key: string): Promise<Response> {
       // assets/ holds site-provided assets (effect reference videos etc.); file names are chosen by the site, read-only.
       if (
-        !/^(jobs\/job_[a-z0-9]+\/\d+\.[a-z0-9]+|uploads\/up_[a-z0-9]+\.(png|jpg|webp)|assets\/[a-z0-9][a-z0-9/_-]*\.(mp4|mp3|png|jpg|webp))$/.test(
+        !/^(jobs\/job_[a-z0-9]+\/(\d+\.[a-z0-9]+|repair-[a-z0-9_-]+-\d+\.mp4)|uploads\/up_[a-z0-9]+\.(png|jpg|webp)|assets\/[a-z0-9][a-z0-9/_-]*\.(mp4|mp3|png|jpg|webp))$/.test(
           key,
         ) ||
         key.includes('..')
@@ -329,8 +329,10 @@ export function createJobs(core: Core, models: readonly ModelDefinition[]) {
         return errorResponse(404, 'not_found');
       }
       // Outputs are only served after the job succeeds: if a cancel lands between "stored" and "marked succeeded", the user was refunded and must not get the result.
+      // Repair inputs (the frames a repair pass hands the upstream) are only served while the job runs.
       const jobId = key.startsWith('jobs/') ? key.split('/')[1] : null;
-      if (jobId && (await loadJob(core.db, jobId))?.status !== 'succeeded')
+      const status = jobId ? (await loadJob(core.db, jobId))?.status : null;
+      if (jobId && status !== (key.includes('/repair-') ? 'submitted' : 'succeeded'))
         return errorResponse(404, 'not_found');
       const object = await env().OUTPUTS.get(key);
       if (!object) return errorResponse(404, 'not_found');

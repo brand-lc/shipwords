@@ -173,6 +173,167 @@ export function parsePoints(text) {
   return points;
 }
 
+/**
+ * Repair frame ranges: a JSON-parsed list of 1–10 [start, end) frame pairs, increasing and not overlapping. Throws on anything else.
+ * @param {unknown} ranges
+ * @returns {[number, number][]}
+ */
+export function checkRanges(ranges) {
+  if (
+    !Array.isArray(ranges) ||
+    ranges.length === 0 ||
+    ranges.length > 10 ||
+    !ranges.every(
+      (range, i) =>
+        Array.isArray(range) &&
+        range.length === 2 &&
+        range.every((value) => Number.isSafeInteger(value)) &&
+        range[0] >= (i === 0 ? 0 : ranges[i - 1][1]) &&
+        range[1] > range[0],
+    )
+  )
+    throw new Error('bad ranges');
+  return ranges;
+}
+
+/**
+ * A crop box [x, y, width, height] as fractions of a width×height frame, in even pixels inside the frame. Throws on a bad box.
+ * @param {unknown} box
+ */
+export function cropPixels(box, width, height) {
+  if (
+    !Array.isArray(box) ||
+    box.length !== 4 ||
+    !box.every((value) => typeof value === 'number' && value >= 0 && value <= 1) ||
+    !(box[2] > 0 && box[3] > 0)
+  )
+    throw new Error('bad crop');
+  const even = (value) => 2 * Math.round(value / 2);
+  const x = Math.min(even(box[0] * width), width - 2);
+  const y = Math.min(even(box[1] * height), height - 2);
+  return {
+    x,
+    y,
+    w: Math.max(2, Math.min(even(box[2] * width), width - x)),
+    h: Math.max(2, Math.min(even(box[3] * height), height - y)),
+  };
+}
+
+const ENCODE = [
+  '-c:v',
+  'libx264',
+  '-preset',
+  'veryfast',
+  '-crf',
+  '18',
+  '-pix_fmt',
+  'yuv420p',
+  '-movflags',
+  '+faststart',
+];
+
+/**
+ * Repair input: join the frames of each range (one input per range, so nothing is buffered while another range plays), and with crop
+ * cut that box out and scale it up to the frame width (replace models work better on a person filling the frame). No audio.
+ * @param {{ input: string; ranges: [number, number][]; crop?: number[]; width: number; height: number; output: string }} spec
+ */
+export function buildExtractArgs({ input, ranges, crop, width, height, output }) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+  for (const _ of ranges) args.push('-i', input);
+  const filters = ranges.map(
+    ([start, end], i) => `[${i}:v]trim=start_frame=${start}:end_frame=${end},setpts=PTS-STARTPTS[c${i}]`,
+  );
+  let joined = `${ranges.map((_, i) => `[c${i}]`).join('')}concat=n=${ranges.length}:v=1:a=0`;
+  if (crop) {
+    const box = cropPixels(crop, width, height);
+    joined += `,crop=${box.w}:${box.h}:${box.x}:${box.y},scale=${width}:-2`;
+  }
+  filters.push(`${joined}[v]`);
+  return [...args, '-filter_complex', filters.join(';'), '-map', '[v]', '-an', ...ENCODE, output];
+}
+
+/**
+ * Alpha expression for a pasted box: opaque inside, fading to transparent over `feather` pixels at edges inside the frame,
+ * hard at edges on the frame border (nothing to blend with there).
+ */
+function featherAlpha(box, width, height, feather) {
+  const left = box.x > 0 ? 'X' : feather;
+  const right = box.x + box.w < width ? '(W-1-X)' : feather;
+  const top = box.y > 0 ? 'Y' : feather;
+  const bottom = box.y + box.h < height ? '(H-1-Y)' : feather;
+  return `255*min(1,min(min(${left},${right}),min(${top},${bottom}))/${feather})`;
+}
+
+/**
+ * Put a repaired clip back over the frames buildExtractArgs took. The clip (any size, frame rate and a slightly different length)
+ * is retimed to the ranges' total length, scaled to the frame or the box, and split back into the ranges in order. A whole-frame
+ * clip replaces those frames; a box is overlaid on them with feathered inner edges. Frames outside the ranges and the audio are kept.
+ * @param {{ video: string; frames: number; patch: string; patchDuration: number; ranges: [number, number][]; crop?: number[];
+ *   width: number; height: number; fps: number; output: string }} spec
+ *   frames: frame count of video.
+ */
+export function buildPatchArgs(spec) {
+  const { video, frames, patch, patchDuration, ranges, crop, width, height, fps, output } = spec;
+  if (!(patchDuration > 0)) throw new Error('patch duration must be positive');
+  if (ranges[ranges.length - 1][1] > frames) throw new Error('ranges run past the video');
+  const box = crop ? cropPixels(crop, width, height) : { x: 0, y: 0, w: width, h: height };
+  const feather = Math.max(2, Math.min(48, Math.floor(Math.min(box.w, box.h) / 4)));
+  const length = ranges.reduce((sum, [start, end]) => sum + end - start, 0);
+  const ratio = length / fps / patchDuration;
+
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', video];
+  const filters = [];
+  const pieces = [];
+  let input = 1;
+  const base = (start, end) => {
+    args.push('-i', video);
+    const label = `b${input}`;
+    filters.push(
+      `[${input++}:v]trim=start_frame=${start}${end === null ? '' : `:end_frame=${end}`},setpts=PTS-STARTPTS[${label}]`,
+    );
+    return label;
+  };
+  let offset = 0;
+  let previous = 0;
+  for (const [start, end] of ranges) {
+    if (start > previous) pieces.push(base(previous, start));
+    args.push('-i', patch);
+    const label = `p${input}`;
+    filters.push(
+      `[${input++}:v]setpts=${ratio.toFixed(6)}*(PTS-STARTPTS),fps=${fps},scale=${box.w}:${box.h},setsar=1,` +
+        `tpad=stop_mode=clone:stop=${fps},trim=start_frame=${offset}:end_frame=${offset + end - start},setpts=PTS-STARTPTS` +
+        (crop
+          ? `,format=yuva420p,geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='${featherAlpha(box, width, height, feather)}'`
+          : '') +
+        `[${label}]`,
+    );
+    if (crop) {
+      const under = base(start, end);
+      filters.push(`[${under}][${label}]overlay=${box.x}:${box.y}[o${label}]`);
+      pieces.push(`o${label}`);
+    } else pieces.push(label);
+    offset += end - start;
+    previous = end;
+  }
+  if (previous < frames) pieces.push(base(previous, null));
+  filters.push(
+    `${pieces.map((label) => `[${label}]`).join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p[v]`,
+  );
+  return [
+    ...args,
+    '-filter_complex',
+    filters.join(';'),
+    '-map',
+    '[v]',
+    '-map',
+    '0:a?',
+    '-c:a',
+    'copy',
+    ...ENCODE,
+    output,
+  ];
+}
+
 /** Silent version: drop the audio track, copy the video stream as-is. */
 export function buildSilentArgs(input, output) {
   return [

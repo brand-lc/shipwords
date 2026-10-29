@@ -115,5 +115,13 @@ export function mockComposer(bucket: R2Bucket, fixed?: { song: string; silent: s
     async faces(input) {
       return input.points.map(() => 0);
     },
+    // Never reached while faces always passes; kept as plain copies so the interface is complete.
+    async extract(input) {
+      return read(input.key);
+    },
+    async patch(input) {
+      const bytes = await read(input.key);
+      return { song: bytes, silent: bytes.slice(0) };
+    },
   };
 }

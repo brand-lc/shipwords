@@ -3,7 +3,7 @@ import { getBalance, grantCredits, spendCredits } from '@shipwords/core/credits/
 import { createDb } from '@shipwords/core/db/client';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComposeInput, Composer, FacesInput } from '../src/compose';
+import type { ComposeInput, Composer, ExtractInput, FacesInput, PatchInput } from '../src/compose';
 import { appendUpstreamJob, loadJob, markFailed, spendKey } from '../src/lifecycle';
 import { defineModels, type EffectSegment, effectParts, type ModelDefinition } from '../src/models';
 import { PREP_HEDGE_MS, runGeneration, type StepRunner } from '../src/runner';
@@ -467,6 +467,18 @@ describe('effect compose', () => {
       if (this.checkError) throw this.checkError;
       return this.scores.shift() ?? input.points.map(() => 0.3);
     }
+    extracts: ExtractInput[] = [];
+    patches: PatchInput[] = [];
+    async extract(input: ExtractInput) {
+      this.extracts.push(input);
+      return new Uint8Array([7]).buffer;
+    }
+    /** The repaired song of pass n is the single byte 10 + n, its silent copy 20 + n. */
+    async patch(input: PatchInput) {
+      this.patches.push(input);
+      const n = this.patches.length - 1;
+      return { song: new Uint8Array([10 + n]).buffer, silent: new Uint8Array([20 + n]).buffer };
+    }
   }
 
   async function composeJob(slots: Record<string, string>) {
@@ -884,6 +896,345 @@ describe('effect compose', () => {
           },
         ]),
       ).toThrow(/needs compose/);
+    });
+  });
+
+  describe('repair passes', () => {
+    // One segment, three shots: front and edge in the wide shots 0 and 2, solo alone in shot 1; edge sits in the top-left box.
+    const repair = {
+      upstreamModel: 'vendor/replace',
+      prompt: (slots: readonly string[]) => `replace ${slots.join(' ')}`,
+      parameters: { resolution: '720p' },
+      maxCost: '0.10',
+      rounds: 3,
+      shots: [['front', 'edge'], ['solo'], ['front', 'edge']],
+      crops: { edge: [0, 0, 0.4, 0.4] as const },
+    };
+    const band: EffectSegment = {
+      id: 'band',
+      referenceVideo: 'assets/demo/band.mp4',
+      slots: ['front', 'edge', 'solo'],
+      prompt: () => 'edit',
+      parameters: { duration: 6 },
+      maxCost: '0.50',
+      target: 6,
+      cuts: [2, 4],
+      base: 'assets/demo/band.mp4',
+      check: {
+        original: 'assets/demo/band.mp4',
+        faces: { front: [0.5, 0.5], edge: [0.1, 0.1], solo: [0.5, 0.4, 3] },
+        maxSimilarity: 0.45,
+      },
+      repair,
+    };
+    const repairModel: ModelDefinition = {
+      ...composeModel,
+      id: 'demo-repair',
+      maxCost: '0.80',
+      effect: {
+        slots: [
+          { id: 'front', label: 'Front', required: false },
+          { id: 'edge', label: 'Edge', required: false },
+          { id: 'solo', label: 'Solo', required: false },
+        ],
+        segments: [band],
+        compose: composeModel.effect!.compose,
+      },
+    };
+    const repairModels = defineModels([repairModel]);
+    const slotPhotos = {
+      front: '/files/uploads/up_f.png',
+      edge: '/files/uploads/up_e.png',
+      solo: '/files/uploads/up_s.png',
+    };
+    const fileUrl = (key: string) => `https://site/files/${key}`;
+
+    async function repairJob() {
+      const userId = `u_${crypto.randomUUID().slice(0, 10)}`;
+      const jobId = `job_${crypto.randomUUID().replaceAll('-', '')}`;
+      const parts = effectParts(repairModel, slotPhotos, upload, asset)!;
+      await grantCredits(db, { userId, amount: 50, idemKey: `g:${userId}`, source: 'test' });
+      await spendCredits(db, { userId, amount: 10, idemKey: spendKey(jobId) }, [
+        db.insert(jobs).values({
+          id: jobId,
+          userId,
+          modelId: 'demo-repair',
+          kind: 'video',
+          prompt: '',
+          inputJson: JSON.stringify({ parts }),
+          costCredits: 10,
+          upstream: 'yir',
+        }),
+      ]);
+      const adapter = new FakeAdapter();
+      adapter.polls.set(`up_${jobId}`, [succeeded('band')]);
+      for (const round of [0, 1, 2])
+        adapter.polls.set(`up_${jobId}:band:repair:${round}`, [succeeded(`repair-${round}`)]);
+      return { userId, jobId, adapter };
+    }
+    const repairDeps = (adapter: FakeAdapter, composer: FakeComposer) => ({
+      ...deps(adapter),
+      models: repairModels,
+      composer,
+      fileUrl,
+    });
+    const bytesOf = async (key: string) => new Uint8Array(await (await env.OUTPUTS.get(key))!.arrayBuffer());
+
+    it('a missed edge person: whole wide shots with everyone in them first, then their box alone, then delivered', async () => {
+      const { userId, jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      // Scores per check in slot order front, edge, solo: the render misses edge, the whole-frame pass still misses edge, the box pass gets it.
+      composer.scores = [
+        [0.3, 0.8, 0.2],
+        [0.3, 0.7, 0.2],
+        [0.3, 0.2, 0.2],
+      ];
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+
+      expect(composer.calls).toHaveLength(1);
+      expect(composer.extracts).toEqual([
+        {
+          jobId,
+          key: `jobs/${jobId}/1.mp4`,
+          ranges: [
+            [0, 48],
+            [96, 144],
+          ],
+          width: 720,
+          height: 1280,
+          fps: 24,
+        },
+        {
+          jobId,
+          key: `jobs/${jobId}/repair-band-0-song.mp4`,
+          ranges: [
+            [0, 48],
+            [96, 144],
+          ],
+          crop: [0, 0, 0.4, 0.4],
+          width: 720,
+          height: 1280,
+          fps: 24,
+        },
+      ]);
+      const repairs = adapter.submits.slice(1);
+      expect(repairs.map((s) => s.key)).toEqual([`${jobId}:band:repair:0`, `${jobId}:band:repair:1`]);
+      expect(repairs[0]!.input).toEqual({
+        upstreamModel: 'vendor/replace',
+        kind: 'video',
+        prompt: 'replace front edge',
+        references: [
+          { url: `https://site/files/jobs/${jobId}/repair-band-0.mp4`, role: 'reference_video' },
+          { url: 'https://site/files/uploads/up_f.png', role: 'reference_image' },
+          { url: 'https://site/files/uploads/up_e.png', role: 'reference_image' },
+        ],
+        parameters: { resolution: '720p', seed: 1 },
+        maxCost: '0.10',
+      });
+      expect(repairs[1]!.input).toMatchObject({
+        prompt: 'replace edge',
+        references: [
+          { url: `https://site/files/jobs/${jobId}/repair-band-1.mp4`, role: 'reference_video' },
+          { url: 'https://site/files/uploads/up_e.png', role: 'reference_image' },
+        ],
+        parameters: { resolution: '720p', seed: 2 },
+      });
+      expect(composer.patches.map((p) => [p.key, p.patchKey, p.name])).toEqual([
+        [`jobs/${jobId}/1.mp4`, `jobs/${jobId}/repair-band-0-out.mp4`, `${jobId}-repair-band-0`],
+        [
+          `jobs/${jobId}/repair-band-0-song.mp4`,
+          `jobs/${jobId}/repair-band-1-out.mp4`,
+          `${jobId}-repair-band-1`,
+        ],
+      ]);
+      // Repaired videos are checked on the composed timeline, every filled slot again.
+      expect(composer.checks.slice(1)).toEqual([
+        {
+          jobId,
+          key: `jobs/${jobId}/repair-band-0-song.mp4`,
+          originalKey: 'assets/demo/band.mp4',
+          points: [
+            [0.5, 0.5],
+            [0.1, 0.1],
+            [0.5, 0.4, 3],
+          ],
+          seconds: 6,
+        },
+        expect.objectContaining({ key: `jobs/${jobId}/repair-band-1-song.mp4` }),
+      ]);
+      const job = await loadJob(db, jobId);
+      expect(job).toMatchObject({
+        status: 'succeeded',
+        upstreamJobId: `up_${jobId},up_${jobId}:band:repair:0,up_${jobId}:band:repair:1`,
+      });
+      expect(JSON.parse(job!.outputsJson!)).toEqual([
+        { key: `jobs/${jobId}/1.mp4`, mediaType: 'video/mp4' },
+        { key: `jobs/${jobId}/2.mp4`, mediaType: 'video/mp4' },
+      ]);
+      expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([11]));
+      expect(await bytesOf(`jobs/${jobId}/2.mp4`)).toEqual(new Uint8Array([21]));
+      expect((await getBalance(db, userId)).available).toBe(40);
+    });
+
+    it('a missed close-up person: only their shot, only their photo; the first pass fixing it delivers', async () => {
+      const { jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      composer.scores = [
+        [0.3, 0.2, 0.9],
+        [0.3, 0.2, 0.1],
+      ];
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+      expect(composer.extracts.map((e) => [e.ranges, e.crop])).toEqual([[[[48, 96]], undefined]]);
+      expect(adapter.submits[1]!.input.references.map((r) => r.url)).toEqual([
+        `https://site/files/jobs/${jobId}/repair-band-0.mp4`,
+        'https://site/files/uploads/up_s.png',
+      ]);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+      expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([10]));
+    });
+
+    it('passes run out: swap_not_applied, every pass recorded for cost and cancel, refunded once', async () => {
+      const { userId, jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      composer.scores = [0, 1, 2, 3].map(() => [0.3, 0.8, 0.2]);
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+      expect(adapter.submits).toHaveLength(4);
+      // After the whole-frame pass, later passes keep to the box, each with a new seed.
+      expect(composer.extracts.map((e) => e.crop)).toEqual([undefined, [0, 0, 0.4, 0.4], [0, 0, 0.4, 0.4]]);
+      expect(adapter.submits.slice(1).map((s) => s.input.parameters.seed)).toEqual([1, 2, 3]);
+      const job = await loadJob(db, jobId);
+      expect(job).toMatchObject({ status: 'failed', errorCode: 'swap_not_applied' });
+      expect(job!.upstreamJobId!.split(',')).toHaveLength(4);
+      expect((await getBalance(db, userId)).available).toBe(50);
+      await markFailed(db, jobId, 'failed', 'again', 'again');
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('a repair pass fails or is rejected upstream: no more passes, swap_not_applied, refunded', async () => {
+      for (const setup of [
+        (adapter: FakeAdapter, jobId: string) =>
+          adapter.polls.set(`up_${jobId}:band:repair:0`, [{ state: 'failed', code: 'nsfw', message: 'no' }]),
+        (adapter: FakeAdapter) => {
+          adapter.submitErrors = [null, new UpstreamError('content_rejected', 'no', false)];
+        },
+      ]) {
+        const { userId, jobId, adapter } = await repairJob();
+        setup(adapter, jobId);
+        const composer = new FakeComposer();
+        composer.scores = [[0.3, 0.8, 0.2]];
+        await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'swap_not_applied' });
+        expect(composer.patches).toHaveLength(0);
+        expect((await getBalance(db, userId)).available).toBe(50);
+      }
+    });
+
+    it('without a public file URL a missed swap is refunded as before, with no repair', async () => {
+      const { userId, jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      composer.scores = [[0.3, 0.8, 0.2]];
+      const { fileUrl: _, ...noUrl } = repairDeps(adapter, composer);
+      await runGeneration(noUrl, jobId, durableSteps());
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'swap_not_applied' });
+      expect(adapter.submits).toHaveLength(1);
+      expect(composer.calls).toHaveLength(0);
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('replay after an interruption mid-pass: the pass is not submitted twice, the job finishes', async () => {
+      const { jobId, adapter } = await repairJob();
+      const composer = new FakeComposer();
+      composer.scores = [
+        [0.3, 0.8, 0.2],
+        [0.3, 0.1, 0.2],
+      ];
+      const cache = new Map<string, unknown>();
+      const crashing: StepRunner = {
+        async do(name, fn) {
+          if (name === 'repair:band:0:patch' || name === 'abort' || name === 'settle')
+            throw new Error('stop here');
+          if (cache.has(name)) return cache.get(name) as never;
+          const value = await fn();
+          cache.set(name, value);
+          return value;
+        },
+        async sleep() {},
+      };
+      await expect(runGeneration(repairDeps(adapter, composer), jobId, crashing)).rejects.toThrow();
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps(cache));
+      expect(adapter.submits.map((s) => s.key)).toEqual([jobId, `${jobId}:band:repair:0`]);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+    });
+
+    it('user cancels while a pass renders: polling stops, no further passes, refunded once', async () => {
+      const { userId, jobId, adapter } = await repairJob();
+      adapter.polls.set(`up_${jobId}:band:repair:0`, []);
+      adapter.onSubmit = async (key) => {
+        if (key.endsWith(':repair:0')) await markFailed(db, jobId, 'canceled', 'canceled', 'by user');
+      };
+      const composer = new FakeComposer();
+      composer.scores = [[0.3, 0.8, 0.2]];
+      await runGeneration(repairDeps(adapter, composer), jobId, durableSteps());
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'canceled' });
+      // Submitted after the cancel landed: the pass is canceled right away instead of recorded.
+      expect(adapter.cancelled).toContain(`up_${jobId}:band:repair:0`);
+      expect(adapter.submits).toHaveLength(2);
+      expect((await getBalance(db, userId)).available).toBe(50);
+    });
+
+    it('config validation: needs check, cuts and a single composed segment; shots per cut; at most 3 people per pass; boxes inside the frame; passes count toward the cap', () => {
+      const withRepair =
+        (patch: Partial<EffectSegment>, extra: Partial<ModelDefinition> = {}) =>
+        () =>
+          defineModels([
+            {
+              ...repairModel,
+              ...extra,
+              effect: { ...repairModel.effect!, segments: [{ ...band, ...patch }] },
+            },
+          ]);
+      expect(withRepair({})).not.toThrow();
+      expect(withRepair({}, { maxCost: '0.79' })).toThrow(/exceeds/);
+      expect(withRepair({ check: undefined })).toThrow(/needs check/);
+      expect(() =>
+        defineModels([
+          {
+            ...repairModel,
+            maxCost: '2.00',
+            effect: { ...repairModel.effect!, segments: [band, { ...band, id: 'two', repair: undefined }] },
+          },
+        ]),
+      ).toThrow(/single segment/);
+      expect(withRepair({ repair: { ...repair, rounds: 0 } })).toThrow(/rounds/);
+      expect(withRepair({ repair: { ...repair, shots: [['front']] } })).toThrow(/shots/);
+      expect(withRepair({ repair: { ...repair, shots: [['front', 'edge'], ['solo'], ['nobody']] } })).toThrow(
+        /shots/,
+      );
+      expect(
+        withRepair({ repair: { ...repair, shots: [['front', 'edge'], ['front', 'solo'], []] } }),
+      ).not.toThrow();
+      expect(() =>
+        defineModels([
+          {
+            ...repairModel,
+            effect: {
+              ...repairModel.effect!,
+              slots: [...repairModel.effect!.slots, { id: 'extra', label: 'Extra', required: false }],
+              segments: [
+                {
+                  ...band,
+                  slots: [...band.slots, 'extra'],
+                  repair: { ...repair, shots: [['front', 'edge', 'solo'], ['front', 'extra'], []] },
+                },
+              ],
+            },
+          },
+        ]),
+      ).toThrow(/at most 3/);
+      expect(withRepair({ repair: { ...repair, shots: [['front'], ['solo'], ['front']] } })).toThrow(
+        /edge must be in some shot/,
+      );
+      expect(withRepair({ repair: { ...repair, crops: { edge: [0.8, 0, 0.4, 0.4] } } })).toThrow(/crops/);
     });
   });
 });

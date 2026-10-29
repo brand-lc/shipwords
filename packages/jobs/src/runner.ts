@@ -12,6 +12,7 @@ import {
   upstreamIds,
 } from './lifecycle';
 import { type FacePoint, type JobPart, type ModelDefinition, PREP_REF } from './models';
+import { nextRepairPass, type RepairPass, shotFrames } from './repair';
 import { type JobRow, TERMINAL } from './schema';
 import type { OutputFile, PollResult, SubmitInput, UpstreamAdapter } from './upstream';
 import { UpstreamError } from './upstream';
@@ -32,6 +33,11 @@ export interface RunnerDeps {
   /** Effect compose (effect.compose); empty when the site binds no container, and jobs that need compose fail with a refund. */
   composer?: Composer;
   fetcher?: typeof fetch;
+  /**
+   * Public URL of an R2 key, served by the site's /files route. Repair passes (segment.repair) hand the upstream the frames to repair
+   * through it; without it a missed swap fails with a refund.
+   */
+  fileUrl?: (key: string) => string;
   /** Notify the user when the job succeeds or fails (e.g. email) so they don't have to wait on the page; errors are only logged and don't affect the job. */
   notify?: (job: JobRow) => Promise<void>;
   log?: (message: string, details: Record<string, unknown>) => void;
@@ -157,6 +163,8 @@ interface SegmentCheck {
   original?: string;
   faces?: Readonly<Record<string, FacePoint>>;
   seconds: number;
+  /** The segment has repair passes; missing on loads cached by older versions, whose missed swaps are refunded as before. */
+  repair?: boolean;
 }
 
 interface JobInput {
@@ -234,6 +242,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const parts = partsOf(job, model).map((part) => part.id);
     return {
       upstream: model.upstream,
+      model: model.id,
       timeoutMinutes: model.timeoutMinutes,
       createdAt: job.createdAt,
       parts,
@@ -249,6 +258,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
               maxSimilarity: segment.check!.maxSimilarity,
               original: segment.check!.original,
               faces: segment.check!.faces,
+              ...(segment.repair ? { repair: true } : {}),
               // trim segments only put the first target seconds into the output, not rounded: comparing more would include the next shot that gets cut, less would miss the last frames.
               // stretch segments use the whole clip, so compare over the model duration.
               seconds:
@@ -303,6 +313,8 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
   const prepUrls = new Map<string, string>();
   const submittedIds: string[] = [];
   const outputs: StoredOutput[] = [];
+  /** Segments whose check found original people and that have repair passes: segment ID → [part index, missed slots]. */
+  const toRepair = new Map<string, [number, string[]]>();
   /** Key of each segment's first output, looked up by segment ID when composing. */
   const partKeys = new Map<string, string>();
   const timeOut = () =>
@@ -429,41 +441,41 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     }
   };
   /**
-   * Output check: if an original person this segment should replace is still in the output (swap didn't take), fail the whole job with a refund.
-   * No rerun: a video render costs dollars, so a missed swap is refunded rather than paid for twice.
+   * Output check: if an original person this segment should replace is still in the output (swap didn't take), fail the whole job with a refund,
+   * or, for a segment with repair passes, return the slots that still show the original so they are repaired after compose.
+   * No rerun of the segment itself: a video render costs dollars, a repair pass cents.
    * Only slots the user filled are checked: the others keep the original on purpose.
    * Errors in the check itself (container failure, unreadable output) fail the job with a refund: an unchecked video may be the original clip,
    * and refunding one good video costs less than charging for a broken one. Returns false if the job has ended.
    */
-  const verify = async (partId: string, index: number, check: SegmentCheck): Promise<boolean> => {
+  const verify = async (partId: string, index: number, check: SegmentCheck): Promise<boolean | string[]> => {
     const { original, faces } = check;
     const key = partKeys.get(partId);
     if (!key) return true;
     // Step name keeps the old round suffix so in-flight jobs replay their cached check.
-    const verdict = await step
-      .do(`check:${partId}:0`, async () => {
-        const job = await loadJob(deps.db, jobId);
-        if (!job || TERMINAL.includes(job.status)) return { stopped: true as const };
-        if (!original || !faces) return { scores: [] as number[] };
-        const model = deps.models.find((m) => m.id === job.modelId)!;
-        // Parts stored by older versions don't record their slots: check none rather than flag slots the user left as the original.
-        const points = (partsOf(job, model)[index]!.slots ?? [])
-          .map((slot) => faces[slot])
-          .filter((point): point is FacePoint => Boolean(point));
-        if (!deps.composer || points.length === 0) return { scores: [] as number[] };
-        const scores = await deps.composer.faces({
-          jobId,
-          key,
-          originalKey: original,
-          points,
-          seconds: check.seconds,
+    const verdict: { stopped: true } | { errored: string } | { scores: number[]; slots?: string[] } =
+      await step
+        .do(`check:${partId}:0`, async () => {
+          const job = await loadJob(deps.db, jobId);
+          if (!job || TERMINAL.includes(job.status)) return { stopped: true as const };
+          if (!original || !faces) return { scores: [] as number[] };
+          const model = deps.models.find((m) => m.id === job.modelId)!;
+          // Parts stored by older versions don't record their slots: check none rather than flag slots the user left as the original.
+          const slots = (partsOf(job, model)[index]!.slots ?? []).filter((slot) => faces[slot]);
+          if (!deps.composer || slots.length === 0) return { scores: [] as number[] };
+          const scores = await deps.composer.faces({
+            jobId,
+            key,
+            originalKey: original,
+            points: slots.map((slot) => faces[slot]!),
+            seconds: check.seconds,
+          });
+          return { scores, slots };
+        })
+        .catch((error: unknown) => {
+          deps.log?.('swap check errored', { jobId, part: partId, error: String(error) });
+          return { errored: String(error) };
         });
-        return { scores };
-      })
-      .catch((error: unknown) => {
-        deps.log?.('swap check errored', { jobId, part: partId, error: String(error) });
-        return { errored: String(error) };
-      });
     if ('stopped' in verdict) return false;
     if ('errored' in verdict) {
       await fail('check_failed', `${partId} output could not be checked: ${verdict.errored}`.slice(0, 500));
@@ -472,8 +484,195 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const worst = Math.max(0, ...verdict.scores);
     if (worst < check.maxSimilarity) return true;
     deps.log?.('swap not applied', { jobId, part: partId, scores: verdict.scores });
+    // Checks cached by older versions don't name their slots; repair needs compose, the container and a public URL for the frames.
+    if (check.repair && verdict.slots && setup.compose && deps.composer && deps.fileUrl)
+      return verdict.slots.filter((_, i) => verdict.scores[i]! >= check.maxSimilarity);
     await fail('swap_not_applied', `${partId} still shows an original face (similarity ${worst})`);
     return false;
+  };
+
+  /**
+   * Repair passes after compose for a segment whose check found original people (segment.repair, the only segment, so the composed video
+   * shares the original clip's timeline). Each pass cuts the shots of one missed slot out of the composed video, has the replace model
+   * re-render them with the photos, puts them back and checks every filled slot again; nextRepairPass picks whole frame or one person's box.
+   * The upstream tasks are recorded after the segments, so cancel, abort and cost cover them. When the passes run out, the model rejects
+   * or fails a pass, or nothing is left that a pass can cover, the job fails swap_not_applied with a refund.
+   * Returns the delivered outputs (the compose keys, overwritten), or null if the job has ended.
+   */
+  const repairOutputs = async (
+    partId: string,
+    index: number,
+    check: SegmentCheck,
+    initial: string[],
+    composed: StoredOutput[],
+  ): Promise<StoredOutput[] | null> => {
+    let missed = initial;
+    const giveUp = (why: string) =>
+      fail(
+        'swap_not_applied',
+        `${partId} still shows an original face after repair (${why}): ${missed.join(', ')}`.slice(0, 500),
+      );
+    // Read from the current config: the repair functions can't be cached in a step. A config that dropped repair refunds as before.
+    const effect = deps.models.find((m) => m.id === setup.model)?.effect;
+    const segment = effect?.segments.find((candidate) => candidate.id === partId);
+    const repair = segment?.repair;
+    const compose = effect?.compose;
+    if (!segment?.cuts || !repair || !compose || !check.original || !check.faces) {
+      await giveUp('repair is no longer configured');
+      return null;
+    }
+    const { width, height, fps } = compose;
+    const work = (name: string) => `jobs/${jobId}/repair-${partId}-${name}.mp4`;
+    const passes: RepairPass[] = [];
+    let current = composed[0]!.key;
+    let silent = composed[1]!.key;
+    for (let round = 0; round < repair.rounds; round++) {
+      const label = `repair:${partId}:${round}`;
+      const job = await step.do(`${label}:plan`, async () => {
+        const row = await loadJob(deps.db, jobId);
+        if (!row || TERMINAL.includes(row.status)) return null;
+        const model = deps.models.find((m) => m.id === row.modelId)!;
+        const part = partsOf(row, model)[index]!;
+        const photos = submitInput(row, index).references.filter((ref) => ref.role === 'reference_image');
+        return { slots: part.slots ?? [], photos: photos.map((ref) => ref.url) };
+      });
+      if (!job) return null;
+      const pass = nextRepairPass(repair, job.slots, missed, passes);
+      if (!pass) {
+        await giveUp('no pass covers them');
+        return null;
+      }
+      passes.push(pass);
+      const ranges = shotFrames(segment.cuts, segment.target!, fps, pass.shots);
+      const cut = {
+        jobId,
+        key: current,
+        ranges,
+        ...(pass.crop ? { crop: pass.crop } : {}),
+        width,
+        height,
+        fps,
+      };
+      const clip = await step.do(`${label}:extract`, async () => {
+        const bytes = await deps.composer!.extract(cut);
+        await deps.bucket.put(work(String(round)), bytes, { httpMetadata: { contentType: 'video/mp4' } });
+        return work(String(round));
+      });
+      const position = partIds.length + round;
+      const submitted = await step.do(`${label}:submit`, async () => {
+        const row = await loadJob(deps.db, jobId);
+        if (!row || TERMINAL.includes(row.status)) return { done: true as const };
+        const existing = upstreamIds(row)[position];
+        if (existing) return { upstreamJobId: existing };
+        if (Date.now() > deadline) return { timeout: true as const };
+        const input: SubmitInput = {
+          upstreamModel: repair.upstreamModel,
+          kind: 'video',
+          prompt: repair.prompt(pass.slots),
+          references: [
+            { url: deps.fileUrl!(clip), role: 'reference_video' },
+            ...pass.slots.map((slot) => ({
+              url: job.photos[job.slots.indexOf(slot)]!,
+              role: 'reference_image',
+            })),
+          ],
+          // A new seed each pass: the same frames with the same seed may come back the same.
+          parameters: { ...repair.parameters, seed: round + 1 },
+          maxCost: repair.maxCost,
+        };
+        try {
+          const { upstreamJobId } = await adapter.submit(input, `${jobId}:${partId}:repair:${round}`);
+          if (!(await appendUpstreamJob(deps.db, jobId, position, upstreamJobId))) {
+            await adapter.cancel(upstreamJobId).catch(() => undefined);
+            return { done: true as const };
+          }
+          return { upstreamJobId };
+        } catch (error) {
+          if (error instanceof UpstreamError && !error.retryable) return { rejected: error.code };
+          throw error;
+        }
+      });
+      if ('done' in submitted) return null;
+      if ('timeout' in submitted) {
+        await timeOut();
+        return null;
+      }
+      if ('rejected' in submitted) {
+        await giveUp(`pass ${round} rejected: ${submitted.rejected}`);
+        return null;
+      }
+      const result = await pollUntilDone(submitted.upstreamJobId, label);
+      if (result.state === 'stopped') return null;
+      if (result.state === 'timeout') {
+        await timeOut();
+        return null;
+      }
+      if (result.state === 'failed' || !result.files[0]) {
+        await giveUp(`pass ${round} failed: ${result.state === 'failed' ? result.code : 'no output'}`);
+        return null;
+      }
+      const file = result.files[0];
+      const patchKey = await step.do(`${label}:store`, async () => {
+        const response = await (deps.fetcher ?? fetch)(file.url);
+        if (!response.ok || !response.body)
+          throw new Error(`download repair ${round} failed: ${response.status}`);
+        await deps.bucket.put(work(`${round}-out`), response.body, {
+          httpMetadata: { contentType: 'video/mp4' },
+        });
+        return work(`${round}-out`);
+      });
+      const patched = await step.do(`${label}:patch`, async () => {
+        const { song, silent: quiet } = await deps.composer!.patch({
+          ...cut,
+          name: `${jobId}-repair-${partId}-${round}`,
+          patchKey,
+        });
+        const meta = { httpMetadata: { contentType: 'video/mp4' } };
+        await deps.bucket.put(work(`${round}-song`), song, meta);
+        await deps.bucket.put(work(`${round}-silent`), quiet, meta);
+        return { song: work(`${round}-song`), silent: work(`${round}-silent`) };
+      });
+      current = patched.song;
+      silent = patched.silent;
+      const slots = job.slots.filter((slot) => check.faces![slot]);
+      const scores = await step
+        .do(`${label}:check`, () =>
+          deps.composer!.faces({
+            jobId,
+            key: current,
+            originalKey: check.original!,
+            points: slots.map((slot) => check.faces![slot]!),
+            seconds: segment.target!,
+          }),
+        )
+        .catch((error: unknown) => ({ errored: String(error) }));
+      if ('errored' in scores) {
+        await fail(
+          'check_failed',
+          `${partId} repair ${round} could not be checked: ${scores.errored}`.slice(0, 500),
+        );
+        return null;
+      }
+      deps.log?.('repair pass checked', { jobId, part: partId, round, pass, scores });
+      missed = slots.filter((_, i) => scores[i]! >= check.maxSimilarity);
+      if (missed.length > 0) continue;
+      const delivered = await step.do(`${label}:deliver`, async () => {
+        for (const [output, source] of [
+          [composed[0]!, current],
+          [composed[1]!, silent],
+        ] as const) {
+          const object = await deps.bucket.get(source);
+          if (!object) throw new Error(`repair output missing: ${source}`);
+          await deps.bucket.put(output.key, await object.arrayBuffer(), {
+            httpMetadata: { contentType: 'video/mp4' },
+          });
+        }
+        return true;
+      });
+      return delivered ? composed : null;
+    }
+    await giveUp(`${repair.rounds} passes`);
+    return null;
   };
 
   // Run prep segments first, then video segments (which use the prep results). Within a phase, submit one by one so segments render upstream in parallel, then poll in turn.
@@ -599,7 +798,10 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       if (stored[0]) partKeys.set(partId, stored[0].key);
       outputs.push(...stored);
       const check = setup.checks?.[partId];
-      if (check && !(await verify(partId, index, check))) return;
+      if (!check) continue;
+      const verdict = await verify(partId, index, check);
+      if (verdict === false) return;
+      if (Array.isArray(verdict)) toRepair.set(partId, [index, verdict]);
     }
   }
   let finalOutputs = outputs;
@@ -608,6 +810,10 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const composed = await step.do('compose', () => composeOutputs(deps, jobId, partKeys, outputs.length));
     if (!composed) return;
     finalOutputs = composed;
+    for (const [partId, [index, slots]] of toRepair) {
+      const repaired = await repairOutputs(partId, index, setup.checks![partId]!, slots, composed);
+      if (!repaired) return;
+    }
   }
   await step.do('finish', async () => {
     await markSucceeded(deps.db, jobId, finalOutputs);

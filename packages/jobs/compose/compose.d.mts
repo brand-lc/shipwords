@@ -23,6 +23,32 @@ export function buildFfmpegArgs(spec: {
 export function buildSilentArgs(input: string, output: string): string[];
 export function parsePoints(text: string): ([number, number] | [number, number, number])[];
 export function buildCutArgs(file: string): string[];
+export function checkRanges(ranges: unknown): [number, number][];
+export function cropPixels(
+  box: unknown,
+  width: number,
+  height: number,
+): { x: number; y: number; w: number; h: number };
+export function buildExtractArgs(spec: {
+  input: string;
+  ranges: [number, number][];
+  crop?: readonly number[];
+  width: number;
+  height: number;
+  output: string;
+}): string[];
+export function buildPatchArgs(spec: {
+  video: string;
+  frames: number;
+  patch: string;
+  patchDuration: number;
+  ranges: [number, number][];
+  crop?: readonly number[];
+  width: number;
+  height: number;
+  fps: number;
+  output: string;
+}): string[];
 export function parseCutTimes(stderr: string): number[];
 export function matchCuts(
   expected: readonly number[],
