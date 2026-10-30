@@ -19,7 +19,7 @@ shipwords is a monorepo for running one AI tool site per keyword. All sites shar
 | UI               | Tailwind v4                                                          | Components live in each site; packages ship headless hooks only                                              |
 | Database         | D1 + Drizzle                                                         | D1 only; migrations use timestamp prefixes                                                                   |
 | Auth             | Better Auth: Google OAuth, One Tap, email one-time codes             | No passwords                                                                                                 |
-| Email            | Cloudflare Email Service (Worker binding)                            | No extra secret needed                                                                                       |
+| Email            | Cloudflare Email Service (Worker binding)                            | No extra secret needed. Copy is built in for en/ja/ko (`core/src/email/copy.ts`), picked by `defaultLocale`  |
 | Bot defense      | reCAPTCHA v3 (score-based)                                           | Called only on guest generation and sign-up; low scores must sign in. Script loads on first tool interaction |
 | Rate limits      | Guest daily quota and site budget in D1 with conditional writes      | KV is eventually consistent and not suitable for exact counters                                              |
 | Device identity  | IP (IPv6 grouped by /64) plus a signed device cookie                 |                                                                                                              |
@@ -140,7 +140,7 @@ One state machine is shared by all providers.
 - **Charging:** credits are debited with the job ID as the idempotency key, after a balance check, before submitting upstream. The job ID is also the upstream idempotency key.
 - **One-way states:** conditional updates prevent a failed or cancelled job from becoming succeeded. Failed and cancelled jobs are refunded from their final state.
 - **No retries on upstream failure:** Yir already retries the task across providers and the SDK retries transient HTTP errors, so a failed upstream job or a rejected submit fails the job at once with a refund. Only a 429 rate limit on submit, or a failed status read, gets Workflow step retries.
-- **Finish email:** with `EMAIL` bound, signed-in users get an email when a job succeeds (result link) or fails (not charged, credits back). It is sent after the refund settles; cancelled and guest jobs get none.
+- **Finish email:** with `EMAIL` bound, signed-in users get an email when a job succeeds (result link) or fails (not charged, credits back). It is sent after the refund settles; cancelled and guest jobs get none. Like sign-in codes, it is written in the site's `defaultLocale` (English when that language has no built-in copy).
 - **Upstream cost:** after a job ends (succeeded or failed), the Workflow reads `cost` for every upstream job and stores the sum in `jobs.upstream_cost_usd`. Billing can settle after the result lands, so it re-reads up to 4 times, 30 s apart, writing each complete read; only an explicit `settled` status ends the wait. Best-effort: a read failure is only logged and keeps the last amount written. Not counted: prep hedge copies and jobs cancelled by the user (the cancel terminates the Workflow first).
 - **Cancel** also terminates the Workflow instance.
 - **Observability:** per-stage timestamps and error classification; side effects run in `waitUntil`.
@@ -239,6 +239,7 @@ These directions are kept possible without code written for them today:
 - The credit ledger uses a per-user version lock, so one user's ledger writes are serialized; heavy concurrent debits for the same user retry (up to 8 times) without affecting correctness.
 - PayPal subscription payments do not expose partial refund amounts, so a partial refund claws back the whole period's credits; refund subscriptions in full only.
 - Cancelling a PayPal subscription takes effect immediately, but the paid period stays active (last payment time plus one interval).
+- Engine emails use the site's `defaultLocale`, not the visitor's locale, so a multi-locale site sends one language. Better Auth's own error messages stay English; sites translate what they show.
 - Concurrency tests run on workerd's in-memory D1 with `Promise.all`; they approximate interleavings rather than step through them.
 
 **Not built**
