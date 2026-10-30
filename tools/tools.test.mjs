@@ -164,6 +164,13 @@ test('new site: renames, writes README, check-site finds unfinished items', () =
     'messages/legal/en.json still has TODO placeholders (policy text or update date)',
     'messages/common/en.json still has TODO placeholders (policy text or update date)',
   ]);
+  // A site whose only locale is not English is held to the same rule.
+  fs.renameSync(path.join(target, 'messages', 'legal', 'en.json'), path.join(target, 'messages', 'legal', 'ja.json'));
+  assert.ok(
+    checkSite(target).includes(
+      'messages/legal/ja.json still has TODO placeholders (policy text or update date)',
+    ),
+  );
   fs.rmSync(path.join(target, 'src', 'routes', 'dmca.tsx'));
   fs.writeFileSync(
     path.join(target, 'src', 'site', 'legal.tsx'),

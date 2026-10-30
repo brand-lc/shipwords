@@ -189,10 +189,14 @@ function checkLegal(dir, isTemplate) {
   const email = fs.readFileSync(path.join(dir, LEGAL_FILE), 'utf8').match(/SUPPORT_EMAIL = '([^']*)'/)?.[1];
   if (!email || email.endsWith('example.com'))
     problems.push(`${LEGAL_FILE} SUPPORT_EMAIL is still a placeholder`);
+  // Every shipped locale counts, so a site whose base locale is not English is checked too; zh is the dev-only review copy.
   for (const block of ['legal', 'common']) {
-    const file = path.join(dir, 'messages', block, 'en.json');
-    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('TODO')) {
-      problems.push(`messages/${block}/en.json still has TODO placeholders (policy text or update date)`);
+    const folder = path.join(dir, 'messages', block);
+    if (!fs.existsSync(folder)) continue;
+    for (const name of fs.readdirSync(folder).sort()) {
+      if (!name.endsWith('.json') || name === 'zh.json') continue;
+      if (fs.readFileSync(path.join(folder, name), 'utf8').includes('TODO'))
+        problems.push(`messages/${block}/${name} still has TODO placeholders (policy text or update date)`);
     }
   }
   return problems;
