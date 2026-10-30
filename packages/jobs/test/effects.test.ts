@@ -1197,6 +1197,56 @@ describe('effect compose', () => {
       expect((await getBalance(db, userId)).available).toBe(50);
     });
 
+    it('with prep: passes send the prepped photos, not the uploads', async () => {
+      const prepRepairModel: ModelDefinition = {
+        ...repairModel,
+        maxCost: '0.86',
+        effect: {
+          ...repairModel.effect!,
+          slots: repairModel.effect!.slots.map((slot) => ({ ...slot, prep: `clean ${slot.id}` })),
+          prep: { upstreamModel: 'vendor/image', parameters: {}, maxCost: '0.01' },
+        },
+      };
+      const models = defineModels([prepRepairModel]);
+      const userId = `u_${crypto.randomUUID().slice(0, 10)}`;
+      const jobId = `job_${crypto.randomUUID().replaceAll('-', '')}`;
+      const parts = effectParts(models[0]!, slotPhotos, upload, asset)!;
+      expect(parts.map((p) => p.id)).toEqual(['prep-front', 'prep-edge', 'prep-solo', 'band']);
+      await grantCredits(db, { userId, amount: 50, idemKey: `g:${userId}`, source: 'test' });
+      await spendCredits(db, { userId, amount: 10, idemKey: spendKey(jobId) }, [
+        db.insert(jobs).values({
+          id: jobId,
+          userId,
+          modelId: 'demo-repair',
+          kind: 'video',
+          prompt: '',
+          inputJson: JSON.stringify({ parts }),
+          costCredits: 10,
+          upstream: 'yir',
+        }),
+      ]);
+      const adapter = new FakeAdapter();
+      for (const slot of ['front', 'edge', 'solo'])
+        adapter.polls.set(`up_${jobId}:prep-${slot}`, [
+          { state: 'succeeded', files: [{ url: `https://up/${slot}-prep.png`, mediaType: 'image/png' }] },
+        ]);
+      adapter.polls.set(`up_${jobId}:band`, [succeeded('band')]);
+      adapter.polls.set(`up_${jobId}:band:repair:0`, [succeeded('repair-0')]);
+      const composer = new FakeComposer();
+      composer.scores = [
+        [0.3, 0.8, 0.2],
+        [0.3, 0.2, 0.2],
+      ];
+      await runGeneration({ ...repairDeps(adapter, composer), models }, jobId, durableSteps());
+      const pass = adapter.submits.find((s) => s.key === `${jobId}:band:repair:0`)!;
+      expect(pass.input.references.slice(1).map((r) => r.url)).toEqual([
+        'https://up/front-prep.png',
+        'https://up/edge-prep.png',
+      ]);
+      expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+      expect((await getBalance(db, userId)).available).toBe(40);
+    });
+
     describe("onMiss 'deliver': the paid render was charged, so a miss delivers instead of refunding", () => {
       const deliverModels = defineModels([
         {
