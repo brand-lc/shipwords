@@ -20,6 +20,14 @@ describe('stripAudioTags', () => {
     expect([...stripAudioTags(new Uint8Array(FRAMES))]).toEqual(FRAMES);
     const bad = new Uint8Array([...ascii('ID3'), 4, 0, 0, 0x80, 0, 0, 1, ...FRAMES]);
     expect(stripAudioTags(bad)).toBe(bad);
+    // A footer flag without the "3DI" footer (or on v2.3, which has none) must not cut the first audio frame.
+    for (const version of [4, 3]) {
+      const tag = id3v2('made with vendor');
+      tag[3] = version;
+      tag[5] = 0x10;
+      const flagged = new Uint8Array([...tag, ...FRAMES]);
+      expect(stripAudioTags(flagged)).toBe(flagged);
+    }
     // A tag that claims to run past the end must not empty the file.
     const overlong = new Uint8Array([...ascii('ID3'), 4, 0, 0, 0x7f, 0x7f, 0x7f, 0x7f, ...FRAMES]);
     expect(stripAudioTags(overlong)).toBe(overlong);

@@ -22,10 +22,16 @@ const isAt = (bytes: Uint8Array, at: number, text: string) =>
 export function stripAudioTags(bytes: Uint8Array): Uint8Array {
   let start = 0;
   while (bytes.length - start >= ID3V2_HEADER && isAt(bytes, start, 'ID3')) {
+    const major = bytes[start + 3]!;
     const size = syncsafe(bytes, start + 6);
-    if (size === null) break;
-    const footer = bytes[start + 5]! & 0x10 ? ID3V2_HEADER : 0;
-    start += ID3V2_HEADER + size + footer;
+    if (major < 2 || major > 4 || size === null) return bytes;
+    let next = start + ID3V2_HEADER + size;
+    // Only v2.4 has a footer: trust the flag only when the "3DI" copy is really there, or audio frames would be cut.
+    if (bytes[start + 5]! & 0x10) {
+      if (major !== 4 || !isAt(bytes, next, '3DI')) return bytes;
+      next += ID3V2_HEADER;
+    }
+    start = next;
   }
   let end = bytes.length;
   if (end - start >= ID3V1_SIZE && isAt(bytes, end - ID3V1_SIZE, 'TAG')) end -= ID3V1_SIZE;
