@@ -50,6 +50,7 @@ export const PREP_HEDGE_MS = 60_000;
 
 function extensionFor(mediaType: string): string {
   const subtype = mediaType.split('/')[1]?.split(';')[0] ?? 'bin';
+  if (subtype === 'mpeg' && mediaType.startsWith('audio/')) return 'mp3';
   return subtype === 'jpeg' ? 'jpg' : subtype.replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin';
 }
 
@@ -170,6 +171,8 @@ interface SegmentCheck {
 interface JobInput {
   references?: { url: string; role: string }[];
   parameters?: Record<string, unknown>;
+  /** Music jobs: the user's lyrics. */
+  lyrics?: string;
   parts?: JobPart[];
 }
 
@@ -181,6 +184,7 @@ export function partsOf(job: { prompt: string; inputJson: string }, model: Model
       id: 'main',
       upstreamModel: model.upstreamModel,
       prompt: job.prompt,
+      ...(input.lyrics ? { lyrics: input.lyrics } : {}),
       references: input.references ?? [],
       parameters: input.parameters ?? {},
       ...(model.maxCost ? { maxCost: model.maxCost } : {}),
@@ -345,6 +349,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       upstreamModel: part.upstreamModel,
       kind: part.kind ?? model.kind,
       prompt: part.prompt,
+      ...(part.lyrics ? { lyrics: part.lyrics } : {}),
       references,
       parameters: part.parameters,
       ...(part.maxCost ? { maxCost: part.maxCost } : {}),

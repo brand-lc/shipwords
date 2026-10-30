@@ -1,5 +1,9 @@
 import { createNodeYirClient } from '@yir-ai/sdk/server';
-import type { StandardImageGenerationRequest, StandardVideoGenerationRequest } from '@yir-ai/sdk/shared';
+import type {
+  StandardImageGenerationRequest,
+  StandardMusicGenerationRequest,
+  StandardVideoGenerationRequest,
+} from '@yir-ai/sdk/shared';
 import {
   type PollResult,
   type SubmitInput,
@@ -19,15 +23,26 @@ function toUpstreamError(error: unknown): UpstreamError {
   return new UpstreamError(e?.code ?? 'yir_error', e?.message ?? String(error), e?.status === 429);
 }
 
-export function buildYirRequest(
-  input: SubmitInput,
-): StandardImageGenerationRequest | StandardVideoGenerationRequest {
+type YirRequest =
+  | StandardImageGenerationRequest
+  | StandardVideoGenerationRequest
+  | StandardMusicGenerationRequest;
+
+export function buildYirRequest(input: SubmitInput): YirRequest {
   const references = input.references.map((ref) => ({ role: ref.role, url: ref.url }));
   const base = {
     model: input.upstreamModel,
     parameters: input.parameters,
     ...(input.maxCost ? { max_cost: input.maxCost } : {}),
   };
+  // Music takes text only: a style prompt plus the lyrics, when the user wrote them.
+  if (input.kind === 'music') {
+    if (references.length) throw new UpstreamError('invalid_input', 'music jobs take no references', false);
+    return {
+      ...base,
+      input: { type: 'text', prompt: input.prompt, ...(input.lyrics ? { lyrics: input.lyrics } : {}) },
+    };
+  }
   if (references.length === 0) return { ...base, input: { type: 'text', prompt: input.prompt } };
   // Video image mode only accepts first/last frames; reference images and videos need reference mode.
   const type =
@@ -67,9 +82,11 @@ export class YirAdapter implements UpstreamAdapter {
     const request = buildYirRequest(input);
     try {
       const job =
-        input.kind === 'video'
-          ? await this.client.submitVideo(request as StandardVideoGenerationRequest, idempotencyKey)
-          : await this.client.submitImage(request as StandardImageGenerationRequest, idempotencyKey);
+        input.kind === 'music'
+          ? await this.client.submitMusic(request as StandardMusicGenerationRequest, idempotencyKey)
+          : input.kind === 'video'
+            ? await this.client.submitVideo(request as StandardVideoGenerationRequest, idempotencyKey)
+            : await this.client.submitImage(request as StandardImageGenerationRequest, idempotencyKey);
       return { upstreamJobId: job.id };
     } catch (error) {
       throw error instanceof UpstreamError ? error : toUpstreamError(error);

@@ -21,6 +21,8 @@ export interface GenerateInput {
   modelId: string;
   /** Required for regular models; effects don't accept a prompt. */
   prompt?: string;
+  /** Music models: the user's lyrics; without them the model writes lyrics from the prompt (or makes an instrumental). */
+  lyrics?: string;
   references?: string[];
   parameters?: Record<string, unknown>;
   /** Effects: slot ID → path returned by uploadReference. */

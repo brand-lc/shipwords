@@ -3,8 +3,11 @@
 
 export interface SubmitInput {
   upstreamModel: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'music';
+  /** For music: the style prompt. */
   prompt: string;
+  /** Music only: song lyrics; absent when the model writes them or makes an instrumental. */
+  lyrics?: string;
   /** Reference images: public HTTPS URLs. */
   references: { url: string; role: string }[];
   parameters: Record<string, unknown>;

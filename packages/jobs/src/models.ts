@@ -6,7 +6,8 @@ export interface ModelDefinition {
   /** The site's model ID, used in URLs and requests. */
   id: string;
   name: string;
-  kind: 'image' | 'video';
+  /** music: style prompt plus optional lyrics in, songs out; no references and no effect. */
+  kind: 'image' | 'video' | 'music';
   upstream: 'yir';
   upstreamModel: string;
   /** Credits charged per job; pass a function for parameter-based pricing. */
@@ -168,6 +169,8 @@ export function defineModels<const T extends readonly ModelDefinition[]>(models:
   for (const model of models) {
     if (ids.has(model.id)) throw new Error(`duplicate model id: ${model.id}`);
     ids.add(model.id);
+    if (model.kind === 'music' && (model.effect || model.maxReferences !== 0))
+      throw new Error(`model ${model.id}: music models take no references and no effect`);
     if (model.effect) validateEffect(model, model.effect);
   }
   return models;
@@ -431,6 +434,23 @@ export function sanitizeParameters(model: PublicModel, input: unknown): Record<s
   return result;
 }
 
+/** Longest lyrics a music job accepts; each model's own limit is checked by the upstream. */
+export const MAX_LYRICS = 3000;
+
+/**
+ * Music needs exactly one lyrics source: the user's lyrics, an instrumental, or lyrics the model writes from the prompt.
+ * Settled once at job creation so the stored input is always a valid request.
+ */
+export function musicParameters(
+  parameters: Record<string, unknown>,
+  lyrics: string | undefined,
+): Record<string, unknown> {
+  const { instrumental, lyrics_optimizer: _, ...rest } = parameters;
+  if (lyrics) return rest;
+  if (instrumental === true) return { ...rest, instrumental: true };
+  return { ...rest, lyrics_optimizer: true };
+}
+
 export function creditsFor(model: PublicModel, parameters: Record<string, unknown>): number {
   const value = typeof model.credits === 'function' ? model.credits(parameters) : model.credits;
   if (!Number.isSafeInteger(value) || value < 0)
@@ -445,6 +465,8 @@ export interface JobPart {
   kind?: 'image' | 'video';
   upstreamModel: string;
   prompt: string;
+  /** Music only: the user's lyrics. */
+  lyrics?: string;
   references: { url: string; role: string }[];
   parameters: Record<string, unknown>;
   maxCost?: string;

@@ -38,8 +38,7 @@ export function createAdapters(env: JobsEnv): Record<string, UpstreamAdapter> {
     throw new Error(
       'UPSTREAM_MOCK is set but the mock is inactive (live payment key or non-local APP_URL); refusing to call the upstream',
     );
-  if (mock)
-    return { yir: new MockAdapter(mock, undefined, `${env.APP_URL!.replace(/\/$/, '')}/mock-output.png`) };
+  if (mock) return { yir: new MockAdapter(mock, undefined, env.APP_URL!.replace(/\/$/, '')) };
   return {
     yir: new YirAdapter({
       apiKey: env.YIR_API_KEY,

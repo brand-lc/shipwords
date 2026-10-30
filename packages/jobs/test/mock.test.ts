@@ -173,7 +173,7 @@ describe('fake upstream', () => {
   });
 
   it('text-only image task returns the fallback image', async () => {
-    const adapter = new MockAdapter('succeed', { image: 0, video: 0 }, 'http://localhost/mock-output.png');
+    const adapter = new MockAdapter('succeed', { image: 0, video: 0 }, 'http://localhost');
     const job = await adapter.submit({
       upstreamModel: 'm',
       kind: 'image',

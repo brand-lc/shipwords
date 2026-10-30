@@ -21,7 +21,7 @@ export function emailOnFinish(options: {
     if (!job.userId || (job.status !== 'succeeded' && job.status !== 'failed')) return;
     const [row] = await db.select({ email: user.email }).from(user).where(eq(user.id, job.userId)).limit(1);
     if (!row) return;
-    const what = job.kind === 'video' ? 'video' : 'image';
+    const what = job.kind === 'music' ? 'song' : job.kind;
     const sender = { email: from, name: site.name };
     if (job.status === 'failed') {
       const charge =

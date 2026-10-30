@@ -15,7 +15,7 @@ export const jobs = sqliteTable(
     userId: text('user_id'),
     guestId: text('guest_id'),
     modelId: text('model_id').notNull(),
-    kind: text('kind', { enum: ['image', 'video'] }).notNull(),
+    kind: text('kind', { enum: ['image', 'video', 'music'] }).notNull(),
     prompt: text('prompt').notNull(),
     inputJson: text('input_json').notNull(),
     costCredits: integer('cost_credits').notNull().default(0),

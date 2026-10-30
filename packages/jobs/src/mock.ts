@@ -51,8 +51,9 @@ const PREFIX = 'mock_';
 
 /**
  * Fake upstream: image tasks return the first reference image (a prep segment gets the user's original photo), video tasks return the segment's reference video.
- * A text-only task has nothing to echo back, so it returns fallbackUrl (the site's public/mock-output.png, see createAdapters).
- * Output only "arrives" a few seconds after submit, so the page can show the in-progress state.
+ * A text-only task has nothing to echo back, so it returns a file from siteUrl: public/mock-output.png for images, public/mock-output.mp3
+ * for music (see createAdapters). Output only "arrives" a few seconds after submit, so the page can show the in-progress state;
+ * music takes the video delay.
  */
 export class MockAdapter implements UpstreamAdapter {
   readonly name = 'mock';
@@ -60,13 +61,22 @@ export class MockAdapter implements UpstreamAdapter {
   constructor(
     private readonly mode: MockMode,
     private readonly delayMs = { image: 3_000, video: 10_000 },
-    private readonly fallbackUrl = '',
+    private readonly siteUrl = '',
   ) {}
 
   async submit(input: SubmitInput) {
+    if (input.kind === 'music') {
+      const job: MockJob = {
+        url: this.siteUrl && `${this.siteUrl}/mock-output.mp3`,
+        mediaType: 'audio/mpeg',
+        readyAt: Date.now() + this.delayMs.video,
+      };
+      return { upstreamJobId: PREFIX + btoa(JSON.stringify(job)) };
+    }
     const role = input.kind === 'video' ? 'reference_video' : 'reference_image';
+    const fallback = this.siteUrl && `${this.siteUrl}/mock-output.png`;
     const url =
-      input.references.find((ref) => ref.role === role)?.url ?? input.references[0]?.url ?? this.fallbackUrl;
+      input.references.find((ref) => ref.role === role)?.url ?? input.references[0]?.url ?? fallback;
     const job: MockJob = {
       url,
       mediaType: input.kind === 'video' ? 'video/mp4' : mediaTypeOf(url),
