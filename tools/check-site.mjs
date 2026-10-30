@@ -55,7 +55,7 @@ function zhMessages(dir) {
  * Literal text of every string in a source file, template literals split at ${…}. A small scanner rather than a regex,
  * so apostrophes in comments and // inside URLs are not mistaken for strings or comments.
  */
-export function stringLiterals(source) {
+function stringLiterals(source) {
   const out = [];
   let i = 0;
   while (i < source.length) {

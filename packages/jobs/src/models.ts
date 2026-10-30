@@ -187,6 +187,7 @@ const PUBLIC_KEYS = [
   'maxReferences',
   'effect',
 ] as const;
+const PUBLIC_SLOT_KEYS: readonly string[] = ['id', 'label', 'required'];
 
 /** What the browser may know about a model: name, price and inputs. site.models.ts holds only this, since pages import it. */
 export type PublicModel = Pick<ModelDefinition, Exclude<(typeof PUBLIC_KEYS)[number], 'effect'>> & {
@@ -211,15 +212,16 @@ export function definePublicModels<const T extends readonly PublicModel[]>(model
   for (const model of models) {
     if (ids.has(model.id)) throw new Error(`duplicate model id: ${model.id}`);
     ids.add(model.id);
-    const extra = Object.keys(model).filter((key) => !(PUBLIC_KEYS as readonly string[]).includes(key));
-    const extraSlot = model.effect?.slots.flatMap((slot) =>
-      Object.keys(slot).filter((key) => !['id', 'label', 'required'].includes(key)),
-    );
-    const effectExtra = Object.keys(model.effect ?? {}).filter((key) => key !== 'slots');
     const leaked = [
-      ...extra,
-      ...effectExtra.map((key) => `effect.${key}`),
-      ...(extraSlot ?? []).map((key) => `slot ${key}`),
+      ...Object.keys(model).filter((key) => !(PUBLIC_KEYS as readonly string[]).includes(key)),
+      ...Object.keys(model.effect ?? {})
+        .filter((key) => key !== 'slots')
+        .map((key) => `effect.${key}`),
+      ...(model.effect?.slots ?? []).flatMap((slot) =>
+        Object.keys(slot)
+          .filter((key) => !PUBLIC_SLOT_KEYS.includes(key))
+          .map((key) => `slot ${key}`),
+      ),
     ];
     if (leaked.length)
       throw new Error(

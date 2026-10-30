@@ -6,7 +6,7 @@
 ## How it works
 
 - **Product**: a fixed four-shot template (band, lead close-up, sax solo, band). The stage starts with five dogs; visitors tap a seat and upload a photo (at least one of their own). × on a photo puts the dog back, × on a dog keeps the original coach. Price is per video, 1 to 5 people.
-- **Generation** (`site.models.ts`): an effect model. Kling 4.0 in edit mode takes the whole 17.7-second clip plus the uploaded photos and replaces those people in one pass (about $3.06 at 720p); seats still showing a dog are sent as dog photos, cleared seats keep the original coaches. The compose container (`packages/jobs/compose`, ffmpeg) checks that no original face is left in a swapped seat (otherwise the job fails with a refund), re-aligns the output to the original cut points and mixes the song back in, delivering a version with the song and a silent one.
+- **Generation** (`site.models.ts` for the name, price and slots; `src/models.server.ts` for the rest): an effect model. Kling 4.0 in edit mode takes the whole 17.7-second clip plus the uploaded photos and replaces those people in one pass (about $3.06 at 720p); seats still showing a dog are sent as dog photos, cleared seats keep the original coaches. The compose container (`packages/jobs/compose`, ffmpeg) checks that no original face is left in a swapped seat (otherwise the job fails with a refund), re-aligns the output to the original cut points and mixes the song back in, delivering a version with the song and a silent one.
 - **Pages**: tool home page, tutorial, template page, meme explainer, free page, pricing, policies; FAQ and structured data on each.
 - **Flow**: sign in (Google or email code), buy credits, generate. No guest trial and no signup bonus.
 
@@ -15,7 +15,7 @@
 The reference clips, base clips, song and sample videos are cut from third-party footage and music, so they are not committed:
 
 - `public/media/` (stage photos, sample clips including the dog version) is git-ignored.
-- The R2 objects under `assets/tinydesk/` (`full-17s.mp4`, the clip used as reference, base and check original, and `song.m4a`) are keyed in `site.models.ts`.
+- The R2 objects under `assets/tinydesk/` (`full-17s.mp4`, the clip used as reference, base and check original, and `song.m4a`) are keyed in `src/models.server.ts`.
 
 Use footage and music you have the rights to, or AI-generated base clips, and keep the DMCA page and contact email (both included).
 
