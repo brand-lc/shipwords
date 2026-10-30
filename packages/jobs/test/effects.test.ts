@@ -1335,6 +1335,36 @@ describe('effect compose', () => {
         expect((await getBalance(db, userId)).available).toBe(40);
       });
 
+      it('a pass step keeps throwing (the container patch): the best checked version is delivered; without onMiss it still refunds', async () => {
+        for (const [models, delivered] of [
+          [deliverModels, true],
+          [repairModels, false],
+        ] as const) {
+          const { userId, jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          // The render misses edge and solo; pass 0 fixes solo; pass 1's patch keeps failing.
+          composer.scores = [
+            [0.3, 0.8, 0.9],
+            [0.3, 0.8, 0.2],
+          ];
+          const patch = composer.patch.bind(composer);
+          composer.patch = async (input) => {
+            if (input.name.endsWith('-1')) throw new Error('container down');
+            return patch(input);
+          };
+          await runGeneration({ ...repairDeps(adapter, composer), models }, jobId, durableSteps());
+          if (delivered) {
+            expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+            expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([10]));
+            expect(await bytesOf(`jobs/${jobId}/2.mp4`)).toEqual(new Uint8Array([20]));
+            expect((await getBalance(db, userId)).available).toBe(40);
+          } else {
+            expect(await loadJob(db, jobId)).toMatchObject({ status: 'failed', errorCode: 'internal_error' });
+            expect((await getBalance(db, userId)).available).toBe(50);
+          }
+        }
+      });
+
       it('the check of a repaired video errors: the last checked version is delivered, never the unchecked one', async () => {
         const { userId, jobId, adapter } = await repairJob();
         const composer = new FakeComposer();

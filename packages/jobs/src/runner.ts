@@ -132,7 +132,8 @@ const COST_PAUSE_MS = 30_000;
 /**
  * Record what the upstream actually charged, summed over every upstream task of the job; failed jobs can cost money too.
  * Every complete read is written, so a later read that fails keeps the amount already seen; still unsettled after the last read is logged.
- * Not counted: prep hedge copies (not in upstream_job_id) and jobs canceled by the user (the cancel terminates the Workflow first).
+ * Not counted: prep hedge copies (not in upstream_job_id) and a task the runner cancels right after a user cancel won the race
+ * against its submit (never recorded).
  */
 async function recordCost(deps: RunnerDeps, jobId: string, step: StepRunner): Promise<void> {
   for (let attempt = 0; attempt < COST_READS; attempt++) {
@@ -381,7 +382,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
    * Poll every prep segment together until each finishes. A prep still running PREP_HEDGE_MS after job creation gets one copy,
    * since one stuck image holds back every video segment; the first copy to succeed is used and the other canceled (pollCopies).
    * Copies are not recorded in upstream_job_id (video segments haven't taken their positions yet): this loop cancels them when it sees
-   * the job stopped or timed out. A user cancel terminates the Workflow, so a copy still running then is left to finish upstream (at most one prep maxCost).
+   * the job stopped or timed out. A user cancel only works before the first submit, so it never lands while copies run.
    * Step names replaced the per-prep `poll:<prep>:<n>` of earlier versions: deploy with no effect job in flight, or a replayed job past prep re-polls its preps live.
    */
   type Finished = Exclude<PollResult, { state: 'running' }>;
@@ -533,6 +534,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       return null;
     }
     const { width, height, fps } = compose;
+    const { cuts } = segment;
     const work = (name: string) => `jobs/${jobId}/repair-${partId}-${name}.mp4`;
     const passes: RepairPass[] = [];
     let current = composed[0]!.key;
@@ -578,132 +580,142 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       });
       return (await deliver(`repair:${partId}:deliver-best`, best.song, best.silent)) ? composed : null;
     };
-    for (let round = 0; round < repair.rounds; round++) {
-      const label = `repair:${partId}:${round}`;
-      const job = await step.do(`${label}:plan`, async () => {
-        const row = await loadJob(deps.db, jobId);
-        if (!row || TERMINAL.includes(row.status)) return null;
-        const model = deps.models.find((m) => m.id === row.modelId)!;
-        const part = partsOf(row, model)[index]!;
-        const photos = submitInput(row, index).references.filter((ref) => ref.role === 'reference_image');
-        return { slots: part.slots ?? [], photos: photos.map((ref) => ref.url) };
-      });
-      if (!job) return null;
-      const pass = nextRepairPass(repair, job.slots, missed, passes);
-      if (!pass) return giveUp('no pass covers them', notApplied('no pass covers them'));
-      passes.push(pass);
-      const ranges = shotFrames(segment.cuts, segment.target!, fps, pass.shots);
-      const cut = {
-        jobId,
-        key: current,
-        ranges,
-        ...(pass.crop ? { crop: pass.crop } : {}),
-        width,
-        height,
-        fps,
-      };
-      const clip = await step.do(`${label}:extract`, async () => {
-        const bytes = await deps.composer!.extract(cut);
-        await deps.bucket.put(work(String(round)), bytes, { httpMetadata: { contentType: 'video/mp4' } });
-        return work(String(round));
-      });
-      const position = partIds.length + round;
-      const submitted = await step.do(`${label}:submit`, async () => {
-        const row = await loadJob(deps.db, jobId);
-        if (!row || TERMINAL.includes(row.status)) return { done: true as const };
-        const existing = upstreamIds(row)[position];
-        if (existing) return { upstreamJobId: existing };
-        if (Date.now() > deadline) return { timeout: true as const };
-        const input: SubmitInput = {
-          upstreamModel: repair.upstreamModel,
-          kind: 'video',
-          prompt: repair.prompt(pass.slots),
-          references: [
-            { url: deps.fileUrl!(clip), role: 'reference_video' },
-            ...pass.slots.map((slot) => ({
-              url: job.photos[job.slots.indexOf(slot)]!,
-              role: 'reference_image',
-            })),
-          ],
-          // A new seed each pass: the same frames with the same seed may come back the same.
-          parameters: { ...repair.parameters, seed: round + 1 },
-          maxCost: repair.maxCost,
+    const runPasses = async (): Promise<StoredOutput[] | null> => {
+      for (let round = 0; round < repair.rounds; round++) {
+        const label = `repair:${partId}:${round}`;
+        const job = await step.do(`${label}:plan`, async () => {
+          const row = await loadJob(deps.db, jobId);
+          if (!row || TERMINAL.includes(row.status)) return null;
+          const model = deps.models.find((m) => m.id === row.modelId)!;
+          const part = partsOf(row, model)[index]!;
+          const photos = submitInput(row, index).references.filter((ref) => ref.role === 'reference_image');
+          return { slots: part.slots ?? [], photos: photos.map((ref) => ref.url) };
+        });
+        if (!job) return null;
+        const pass = nextRepairPass(repair, job.slots, missed, passes);
+        if (!pass) return giveUp('no pass covers them', notApplied('no pass covers them'));
+        passes.push(pass);
+        const ranges = shotFrames(cuts, segment.target!, fps, pass.shots);
+        const cut = {
+          jobId,
+          key: current,
+          ranges,
+          ...(pass.crop ? { crop: pass.crop } : {}),
+          width,
+          height,
+          fps,
         };
-        try {
-          const { upstreamJobId } = await adapter.submit(input, `${jobId}:${partId}:repair:${round}`);
-          if (!(await appendUpstreamJob(deps.db, jobId, position, upstreamJobId))) {
-            await adapter.cancel(upstreamJobId).catch(() => undefined);
-            return { done: true as const };
+        const clip = await step.do(`${label}:extract`, async () => {
+          const bytes = await deps.composer!.extract(cut);
+          await deps.bucket.put(work(String(round)), bytes, { httpMetadata: { contentType: 'video/mp4' } });
+          return work(String(round));
+        });
+        const position = partIds.length + round;
+        const submitted = await step.do(`${label}:submit`, async () => {
+          const row = await loadJob(deps.db, jobId);
+          if (!row || TERMINAL.includes(row.status)) return { done: true as const };
+          const existing = upstreamIds(row)[position];
+          if (existing) return { upstreamJobId: existing };
+          if (Date.now() > deadline) return { timeout: true as const };
+          const input: SubmitInput = {
+            upstreamModel: repair.upstreamModel,
+            kind: 'video',
+            prompt: repair.prompt(pass.slots),
+            references: [
+              { url: deps.fileUrl!(clip), role: 'reference_video' },
+              ...pass.slots.map((slot) => ({
+                url: job.photos[job.slots.indexOf(slot)]!,
+                role: 'reference_image',
+              })),
+            ],
+            // A new seed each pass: the same frames with the same seed may come back the same.
+            parameters: { ...repair.parameters, seed: round + 1 },
+            maxCost: repair.maxCost,
+          };
+          try {
+            const { upstreamJobId } = await adapter.submit(input, `${jobId}:${partId}:repair:${round}`);
+            if (!(await appendUpstreamJob(deps.db, jobId, position, upstreamJobId))) {
+              await adapter.cancel(upstreamJobId).catch(() => undefined);
+              return { done: true as const };
+            }
+            return { upstreamJobId };
+          } catch (error) {
+            if (error instanceof UpstreamError && !error.retryable) return { rejected: error.code };
+            throw error;
           }
-          return { upstreamJobId };
-        } catch (error) {
-          if (error instanceof UpstreamError && !error.retryable) return { rejected: error.code };
-          throw error;
+        });
+        if ('done' in submitted) return null;
+        if ('timeout' in submitted) return giveUp('timed out', timeOut);
+        if ('rejected' in submitted) {
+          const why = `pass ${round} rejected: ${submitted.rejected}`;
+          return giveUp(why, notApplied(why));
         }
-      });
-      if ('done' in submitted) return null;
-      if ('timeout' in submitted) return giveUp('timed out', timeOut);
-      if ('rejected' in submitted) {
-        const why = `pass ${round} rejected: ${submitted.rejected}`;
-        return giveUp(why, notApplied(why));
-      }
-      const result = await pollUntilDone(submitted.upstreamJobId, label);
-      if (result.state === 'stopped') return null;
-      if (result.state === 'timeout') return giveUp('timed out', timeOut);
-      if (result.state === 'failed' || !result.files[0]) {
-        const why = `pass ${round} failed: ${result.state === 'failed' ? result.code : 'no output'}`;
-        return giveUp(why, notApplied(why));
-      }
-      const file = result.files[0];
-      const patchKey = await step.do(`${label}:store`, async () => {
-        const response = await (deps.fetcher ?? fetch)(file.url);
-        if (!response.ok || !response.body)
-          throw new Error(`download repair ${round} failed: ${response.status}`);
-        await deps.bucket.put(work(`${round}-out`), response.body, {
-          httpMetadata: { contentType: 'video/mp4' },
+        const result = await pollUntilDone(submitted.upstreamJobId, label);
+        if (result.state === 'stopped') return null;
+        if (result.state === 'timeout') return giveUp('timed out', timeOut);
+        if (result.state === 'failed' || !result.files[0]) {
+          const why = `pass ${round} failed: ${result.state === 'failed' ? result.code : 'no output'}`;
+          return giveUp(why, notApplied(why));
+        }
+        const file = result.files[0];
+        const patchKey = await step.do(`${label}:store`, async () => {
+          const response = await (deps.fetcher ?? fetch)(file.url);
+          if (!response.ok || !response.body)
+            throw new Error(`download repair ${round} failed: ${response.status}`);
+          await deps.bucket.put(work(`${round}-out`), response.body, {
+            httpMetadata: { contentType: 'video/mp4' },
+          });
+          return work(`${round}-out`);
         });
-        return work(`${round}-out`);
-      });
-      const patched = await step.do(`${label}:patch`, async () => {
-        const { song, silent: quiet } = await deps.composer!.patch({
-          ...cut,
-          name: `${jobId}-repair-${partId}-${round}`,
-          patchKey,
+        const patched = await step.do(`${label}:patch`, async () => {
+          const { song, silent: quiet } = await deps.composer!.patch({
+            ...cut,
+            name: `${jobId}-repair-${partId}-${round}`,
+            patchKey,
+          });
+          const meta = { httpMetadata: { contentType: 'video/mp4' } };
+          await deps.bucket.put(work(`${round}-song`), song, meta);
+          await deps.bucket.put(work(`${round}-silent`), quiet, meta);
+          return { song: work(`${round}-song`), silent: work(`${round}-silent`) };
         });
-        const meta = { httpMetadata: { contentType: 'video/mp4' } };
-        await deps.bucket.put(work(`${round}-song`), song, meta);
-        await deps.bucket.put(work(`${round}-silent`), quiet, meta);
-        return { song: work(`${round}-song`), silent: work(`${round}-silent`) };
-      });
-      current = patched.song;
-      silent = patched.silent;
-      const slots = job.slots.filter((slot) => check.faces![slot]);
-      const scores = await step
-        .do(`${label}:check`, () =>
-          deps.composer!.faces({
-            jobId,
-            key: current,
-            originalKey: check.original!,
-            points: slots.map((slot) => check.faces![slot]!),
-            seconds: segment.target!,
-          }),
-        )
-        .catch((error: unknown) => ({ errored: String(error) }));
-      // An unchecked video may have lost people the last check passed, so it is never delivered; best is the last checked version.
-      if ('errored' in scores)
-        return giveUp(`pass ${round} could not be checked`, () =>
-          fail(
-            'check_failed',
-            `${partId} repair ${round} could not be checked: ${scores.errored}`.slice(0, 500),
-          ),
-        );
-      deps.log?.('repair pass checked', { jobId, part: partId, round, pass, scores });
-      missed = slots.filter((_, i) => scores[i]! >= check.maxSimilarity);
-      if (missed.length < best.missed) best = { song: current, silent, missed: missed.length };
-      if (missed.length > 0) continue;
-      return (await deliver(`${label}:deliver`, current, silent)) ? composed : null;
+        current = patched.song;
+        silent = patched.silent;
+        const slots = job.slots.filter((slot) => check.faces![slot]);
+        const scores = await step
+          .do(`${label}:check`, () =>
+            deps.composer!.faces({
+              jobId,
+              key: current,
+              originalKey: check.original!,
+              points: slots.map((slot) => check.faces![slot]!),
+              seconds: segment.target!,
+            }),
+          )
+          .catch((error: unknown) => ({ errored: String(error) }));
+        // An unchecked video may have lost people the last check passed, so it is never delivered; best is the last checked version.
+        if ('errored' in scores)
+          return giveUp(`pass ${round} could not be checked`, () =>
+            fail(
+              'check_failed',
+              `${partId} repair ${round} could not be checked: ${scores.errored}`.slice(0, 500),
+            ),
+          );
+        deps.log?.('repair pass checked', { jobId, part: partId, round, pass, scores });
+        missed = slots.filter((_, i) => scores[i]! >= check.maxSimilarity);
+        if (missed.length < best.missed) best = { song: current, silent, missed: missed.length };
+        if (missed.length > 0) continue;
+        return (await deliver(`${label}:deliver`, current, silent)) ? composed : null;
+      }
+      return giveUp(`${repair.rounds} passes`, notApplied(`${repair.rounds} passes`));
+    };
+    try {
+      return await runPasses();
+    } catch (error) {
+      // A pass step that throws after its Workflow retries (status reads, the download, the container's extract or patch) fails the
+      // job with a refund through the fallback; under onMiss 'deliver' the paid render is delivered instead, as on any other miss.
+      if (repair.onMiss !== 'deliver') throw error;
+      return giveUp(`a pass errored: ${String(error)}`.slice(0, 300), () => Promise.reject(error));
     }
-    return giveUp(`${repair.rounds} passes`, notApplied(`${repair.rounds} passes`));
   };
 
   // Run prep segments first, then video segments (which use the prep results). Within a phase, submit one by one so segments render upstream in parallel, then poll in turn.
