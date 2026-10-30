@@ -1,4 +1,5 @@
 import type { Db } from '@shipwords/core/db/client';
+import { isMp3, stripAudioTags } from './audio-tags';
 import type { Composer, ComposeSegment } from './compose';
 import {
   appendUpstreamJob,
@@ -70,7 +71,11 @@ export async function storeOutputs(
       throw new Error(`download output ${index} failed: ${response.status}`);
     const mediaType = response.headers.get('content-type') ?? file.mediaType;
     const key = `jobs/${jobId}/${startIndex + index}.${extensionFor(mediaType)}`;
-    await deps.bucket.put(key, response.body, { httpMetadata: { contentType: mediaType } });
+    // Songs are a few MB, so buffering them to drop the provider's ID3 tags is cheap; other outputs stream straight through.
+    const body = isMp3(mediaType)
+      ? stripAudioTags(new Uint8Array(await response.arrayBuffer()))
+      : response.body;
+    await deps.bucket.put(key, body, { httpMetadata: { contentType: mediaType } });
     stored.push({ key, mediaType });
   }
   return stored;

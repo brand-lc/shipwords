@@ -12,6 +12,7 @@ import { emailOnFinish } from '../src/notify';
 import { runGeneration, type StepRunner } from '../src/runner';
 import type { PollResult, SubmitInput, UpstreamAdapter } from '../src/upstream';
 import { buildYirRequest, YirAdapter } from '../src/yir';
+import { id3v2 } from './id3';
 
 const db = createDb(env.DB);
 const BASE = 'https://music.test';
@@ -223,6 +224,18 @@ describe('running a music job', () => {
     await runGeneration(deps(adapter), job.id, steps);
     expect(adapter.submits).toHaveLength(1);
     expect((await getBalance(db, userId)).available).toBe(2);
+  });
+
+  it('stores songs without the provider ID3 tags', async () => {
+    const { job } = await queued();
+    const tagged = new Uint8Array([...id3v2('made with vendor; id=abc'), 0xff, 0xfb, 0x90, 0x64]);
+    const adapter = new FakeAdapter();
+    adapter.polls = [{ state: 'succeeded', files: [{ url: 'https://up/a.mp3', mediaType: 'audio/mpeg' }] }];
+    const fetcher: typeof fetch = async () =>
+      new Response(tagged, { headers: { 'content-type': 'audio/mpeg' } });
+    await runGeneration({ ...deps(adapter), fetcher }, job.id, steps);
+    const stored = await env.OUTPUTS.get(`jobs/${job.id}/0.mp3`);
+    expect([...new Uint8Array(await stored!.arrayBuffer())]).toEqual([0xff, 0xfb, 0x90, 0x64]);
   });
 
   it('upstream failure refunds once, even when settled again', async () => {
