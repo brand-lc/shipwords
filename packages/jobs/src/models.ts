@@ -1,6 +1,6 @@
-// Sites declare available models in site.models.ts: public ID, upstream model, credit price, whether guests can try it.
-// Prices are defined only here; frontend display and server-side charging read the same source.
-// site.models.ts ships to the browser, so effect sites keep prompts and reference clips in src/models.server.ts, which spreads the public entry.
+// Each site declares its models in two files. site.models.ts (definePublicModels) holds what pages show: ID, name, credit price,
+// guest eligibility, inputs; pages import it, so it ships to the browser. src/models.server.ts (serverModels) adds the upstream model,
+// cost cap, timeout and effect presets by ID. Prices are defined only in site.models.ts; display and charging read the same source.
 
 export interface ModelDefinition {
   /** The site's model ID, used in URLs and requests. */
@@ -24,7 +24,7 @@ export interface ModelDefinition {
   timeoutMinutes: number;
   /** Role of the user's reference image for the upstream; defaults to reference_image for image models, first_frame for video models. */
   referenceRole?: 'reference_image' | 'first_frame';
-  /** Effects: prompts and reference videos are preset server-side (src/models.server.ts, never site.models.ts); users only upload photos per slot. */
+  /** Effects: prompts and reference videos are preset server-side; users only upload photos per slot. */
   effect?: EffectSpec;
 }
 
@@ -173,6 +173,85 @@ export function defineModels<const T extends readonly ModelDefinition[]>(models:
   return models;
 }
 
+/** An effect slot as the browser sees it: no prep prompt. */
+export type PublicSlot = Omit<EffectSlot, 'prep'>;
+
+const PUBLIC_KEYS = [
+  'id',
+  'name',
+  'kind',
+  'credits',
+  'guest',
+  'allowedParameters',
+  'defaults',
+  'maxReferences',
+  'effect',
+] as const;
+
+/** What the browser may know about a model: name, price and inputs. site.models.ts holds only this, since pages import it. */
+export type PublicModel = Pick<ModelDefinition, Exclude<(typeof PUBLIC_KEYS)[number], 'effect'>> & {
+  effect?: { slots: readonly PublicSlot[] };
+};
+
+/** Effect presets for src/models.server.ts. slots may be repeated (same ids, same order) to add prep prompts. */
+export type ServerEffect = Omit<EffectSpec, 'slots'> & { slots?: readonly EffectSlot[] };
+
+/** The server-only fields of a model: upstream, cost cap, timeout and effect presets. */
+export type ServerModel = Omit<ModelDefinition, keyof PublicModel> & { effect?: ServerEffect };
+
+/** Top-level fields beyond PublicModel become never, so typecheck flags them before the runtime check does. */
+type OnlyPublic<T> = { [K in keyof T]: T[K] & Record<Exclude<keyof T[K], keyof PublicModel>, never> };
+
+/**
+ * For site.models.ts. Pages import that file, so it ships to the browser: any other field (upstream model, cost cap, prompts)
+ * fails typecheck, throws here, and belongs in src/models.server.ts.
+ */
+export function definePublicModels<const T extends readonly PublicModel[]>(models: T & OnlyPublic<T>): T {
+  const ids = new Set<string>();
+  for (const model of models) {
+    if (ids.has(model.id)) throw new Error(`duplicate model id: ${model.id}`);
+    ids.add(model.id);
+    const extra = Object.keys(model).filter((key) => !(PUBLIC_KEYS as readonly string[]).includes(key));
+    const extraSlot = model.effect?.slots.flatMap((slot) =>
+      Object.keys(slot).filter((key) => !['id', 'label', 'required'].includes(key)),
+    );
+    const effectExtra = Object.keys(model.effect ?? {}).filter((key) => key !== 'slots');
+    const leaked = [
+      ...extra,
+      ...effectExtra.map((key) => `effect.${key}`),
+      ...(extraSlot ?? []).map((key) => `slot ${key}`),
+    ];
+    if (leaked.length)
+      throw new Error(
+        `model ${model.id}: ${leaked.join(', ')} would ship to the browser; move it to src/models.server.ts`,
+      );
+  }
+  return models;
+}
+
+/** For src/models.server.ts: joins each public model with its server fields by id, then validates the result like defineModels. */
+export function serverModels<const T extends readonly PublicModel[]>(
+  catalog: T,
+  server: { readonly [K in T[number]['id']]: ServerModel },
+): ModelDefinition[] {
+  const byId: Readonly<Record<string, ServerModel>> = server;
+  const extra = Object.keys(byId).filter((id) => !catalog.some((model) => model.id === id));
+  if (extra.length) throw new Error(`server models without a public entry: ${extra.join(', ')}`);
+  return defineModels(
+    catalog.map((model): ModelDefinition => {
+      const fields = byId[model.id];
+      if (!fields) throw new Error(`model ${model.id}: missing from src/models.server.ts`);
+      if (Boolean(model.effect) !== Boolean(fields.effect))
+        throw new Error(`model ${model.id}: effect must be in both site.models.ts and src/models.server.ts`);
+      if (!model.effect || !fields.effect) return { ...model, ...fields, effect: undefined };
+      const slots = fields.effect.slots ?? model.effect.slots;
+      if (slots.map((slot) => slot.id).join() !== model.effect.slots.map((slot) => slot.id).join())
+        throw new Error(`model ${model.id}: server effect slots must match site.models.ts`);
+      return { ...model, ...fields, effect: { ...fields.effect, slots } };
+    }),
+  );
+}
+
 function validateEffect(model: ModelDefinition, effect: EffectSpec) {
   const modelId = model.id;
   const slotIds = new Set(effect.slots.map((slot) => slot.id));
@@ -314,7 +393,7 @@ function validateRepair(modelId: string, effect: EffectSpec, segment: EffectSegm
   }
 }
 
-export function sanitizeParameters(model: ModelDefinition, input: unknown): Record<string, unknown> {
+export function sanitizeParameters(model: PublicModel, input: unknown): Record<string, unknown> {
   const result: Record<string, unknown> = { ...model.defaults };
   if (input && typeof input === 'object') {
     for (const key of model.allowedParameters) {
@@ -330,7 +409,7 @@ export function sanitizeParameters(model: ModelDefinition, input: unknown): Reco
   return result;
 }
 
-export function creditsFor(model: ModelDefinition, parameters: Record<string, unknown>): number {
+export function creditsFor(model: PublicModel, parameters: Record<string, unknown>): number {
   const value = typeof model.credits === 'function' ? model.credits(parameters) : model.credits;
   if (!Number.isSafeInteger(value) || value < 0)
     throw new Error(`model ${model.id}: invalid credit price ${value}`);

@@ -50,7 +50,8 @@ shipwords/
     README.md           site profile: target keyword and intent, competitors, launch date, payment account, status
     DESIGN.md           this site's visual direction
     site.config.ts      brand, locales, products, quota, billing provider, analytics IDs
-    site.models.ts      models offered by this site, credit cost and upstream cost cap per job
+    site.models.ts      models as pages see them: name, credit cost, guest eligibility, inputs (ships to the browser)
+    src/models.server.ts  the server side of each model: upstream model, cost cap, timeout, effect presets
     src/  messages/  migrations/  public/  wrangler.jsonc  package.json
 
   apps/<sidecar>/       optional standalone Workers that belong to no single site
@@ -70,6 +71,7 @@ Why this split: the parts every site shares (auth, billing, credits, quota, bot 
 7. **Retiring a site.** Delete its directory and take down its Worker, D1, bucket and payment account.
 8. **Migrations.** Package tables and site tables are generated into each site's `migrations/` with `pnpm db:generate` (timestamp prefix) and applied to that site's own D1.
 9. **Secrets** live only in Wrangler secrets (and `.dev.vars` locally, kept outside the repo). The database holds runtime state, not configuration.
+10. **Browser boundary.** Every module a page imports, directly or not, ships to the browser. Server-only code and data (prompts, upstream models, cost caps, reference clips, internal rules) live in `*.server.ts` files, which TanStack Start refuses to bundle for the client. Secrets are read only from the Worker `env` at runtime; code that touches `cloudflare:workers` fails a client build. Config the browser needs goes through an allowlisting server function, never by returning `env`. `check-site` scans the browser bundle for strings from `*.server.ts` files and for `.dev.vars` values.
 
 ## 5. Billing
 
@@ -134,7 +136,7 @@ One state machine is shared by all providers.
 ## 6. Generation jobs
 
 - **Adapter interface:** `submit` / `poll` / `cancel`, plus an optional `cost`. Adapters never touch the database or credits. Submitting twice with the same idempotency key must return the same upstream job. Yir is the default upstream ([yir.ai](https://yir.ai/?utm_source=shipwords&utm_medium=docs)); add another upstream by implementing the same interface.
-- **Model registry:** each site declares its models in `site.models.ts`: upstream model, credit cost, guest eligibility, allowed parameters, reference limit, per-job upstream cost cap (`maxCost`) and timeout.
+- **Model registry:** each site declares its models in two files. `site.models.ts` (`definePublicModels`) holds what pages show: name, credit cost, guest eligibility, allowed parameters, reference limit and effect slots; any other field throws. `src/models.server.ts` (`serverModels`) adds, by ID, the upstream model, per-job upstream cost cap (`maxCost`), timeout and effect presets; both files must list the same models. `core.server.ts` and `server.ts` import the server file; pages import only `site.models.ts`.
 - **Charging:** credits are debited with the job ID as the idempotency key, after a balance check, before submitting upstream. The job ID is also the upstream idempotency key.
 - **One-way states:** conditional updates prevent a failed or cancelled job from becoming succeeded. Failed and cancelled jobs are refunded from their final state.
 - **No retries on upstream failure:** Yir already retries the task across providers and the SDK retries transient HTTP errors, so a failed upstream job or a rejected submit fails the job at once with a refund. Only a 429 rate limit on submit, or a failed status read, gets Workflow step retries.
@@ -150,7 +152,7 @@ One state machine is shared by all providers.
 
 An effect is a model entry with an `effect` field: the user only uploads photos, and the server swaps them into fixed reference clips. `createJobs` and `defineGenerationWorkflow` keep their signatures.
 
-- **Server-only presets:** pages import `site.models.ts`, so it ships to the browser. An effect site keeps only the public part there (id, name, credits, slots); `src/models.server.ts` spreads it and adds the upstream model, cost caps, segments and compose, and `core.server.ts` and `server.ts` import that file. `check-site` fails when `site.models.ts` defines `segments`.
+- **Server-only presets:** slots (ID, label, required) are public; segments, prompts, reference clips, checks, repair and compose live in `src/models.server.ts`. A slot's `prep` prompt is server-only too: repeat the slots there (same IDs, same order) with `prep` added.
 
 - **Input roles:** `ModelDefinition.referenceRole` (`reference_image` or `first_frame`) says how uploads reach the upstream. Default: `reference_image` for image models, `first_frame` for video models. A video job with any `reference_*` input is sent in Yir's `reference` mode, otherwise in `image` mode.
 - **Slots and segments:** `effect.slots` lists the faces a user can fill (`required` or not); `effect.segments` lists the shots, each with a reference video (R2 key under `assets/` or an https URL), the slots it swaps (in `@image1`, `@image2`… order), a prompt builder and parameters. A segment renders only when at least one of its slots is filled; empty segments fall back to the base footage.

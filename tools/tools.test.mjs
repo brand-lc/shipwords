@@ -174,8 +174,8 @@ test('new site: renames, writes README, check-site finds unfinished items', () =
   assert.ok(problems.includes('src/site/legal.tsx SUPPORT_EMAIL is still a placeholder'));
   fs.writeFileSync(path.join(target, 'src', 'bad.ts'), "import x from '../../sites/other/src/x';\n");
   assert.ok(checkSite(target).some((p) => p.includes('imports another site')));
-  fs.appendFileSync(path.join(target, 'site.models.ts'), '// effect: { slots: [], segments: [] }\n');
-  assert.ok(checkSite(target).some((p) => p.includes('effect segments')));
+  fs.rmSync(path.join(target, 'src', 'models.server.ts'));
+  assert.ok(checkSite(target).includes('Missing src/models.server.ts'));
   assert.throws(() => createSite(root, { slug: 'ghibli-photo', template: 'ai-site' }), /already exists/);
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -202,6 +202,46 @@ test('check-site: fails when the browser bundle contains zh messages', () => {
   assert.ok(!checkSite(dir).some((p) => p.includes('zh message')));
   fs.writeFileSync(path.join(dir, 'dist', 'client', 'b.js'), 'const s = "\u9000\u51fa\u767b\u5f55";');
   assert.ok(checkSite(dir).some((p) => p.includes('zh message')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('check-site: fails when the browser bundle contains server-only text or .dev.vars secrets', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipwords-'));
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'dist', 'client'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'src', 'models.server.ts'),
+    [
+      "// Don't ship this: the comment's quotes are not strings, nor is 'https://x' in a comment.",
+      "const clip = 'assets/demo/reference-clip.mp4';",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text containing a template literal
+      'const prompt = (who: string) => `Replace ${who} with the person in @image_1, keep the motion.`;',
+      'const short = "keep it";',
+    ].join('\n'),
+  );
+  fs.writeFileSync(
+    path.join(dir, '.dev.vars'),
+    'APP_URL=http://127.0.0.1:5173\nSTRIPE_SECRET_KEY="sk_test_0123456789"\nRECAPTCHA_SITE_KEY=6Lpublic-site-key\n',
+  );
+  const leaks = () => checkSite(dir).filter((p) => p.startsWith('Build output'));
+  fs.writeFileSync(
+    path.join(dir, 'dist', 'client', 'a.js'),
+    'fetch("http://127.0.0.1:5173");const k="6Lpublic-site-key";const s="keep it";',
+  );
+  assert.deepEqual(leaks(), []);
+  fs.writeFileSync(
+    path.join(dir, 'dist', 'client', 'b.js'),
+    'const p=`x with the person in @image_1, keep the motion.`;',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'dist', 'client', 'c.js'),
+    "const v='assets/demo/reference-clip.mp4',k='sk_test_0123456789';",
+  );
+  assert.deepEqual(leaks(), [
+    'Build output dist/client/b.js contains server-only text from src/models.server.ts (" with the person in @image_1, keep the m…"); keep it out of files that pages import',
+    'Build output dist/client/c.js contains server-only text from src/models.server.ts ("assets/demo/reference-clip.mp4…"); keep it out of files that pages import',
+    'Build output dist/client/c.js contains the value of STRIPE_SECRET_KEY from .dev.vars',
+  ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

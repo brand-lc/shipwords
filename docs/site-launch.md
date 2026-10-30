@@ -13,7 +13,7 @@ From keyword to a live, paid site. Steps marked **(confirm)** create resources, 
 2. Fill in `sites/<dir>/README.md`: target keyword and intent, competitors, and what makes this site different. If there is no difference yet, do not launch.
 3. Test the upstream before setting prices: run a few real generations through [Yir](https://yir.ai/?utm_source=shipwords&utm_medium=docs), record cost, latency and quality, and set each model's `maxCost` with headroom.
 4. Write `DESIGN.md`, then restyle `src/site/styles.css` and the pages to match. Rewrite the home page copy, titles and FAQ for the target keyword.
-5. Choose models in `site.models.ts`; set products, signup bonus and guest quota in `site.config.ts`.
+5. Choose models: names and prices in `site.models.ts`, upstream models and cost caps in `src/models.server.ts`; set products, signup bonus and guest quota in `site.config.ts`.
 6. Replace the `TODO` placeholders in the policy texts under `messages/legal/`. `check-site` fails until they are gone.
 
 ## 3. Cloudflare resources (confirm)

@@ -1,5 +1,5 @@
-import { defineModels } from '@shipwords/jobs/models';
-import { tinyDesk } from '../site.models';
+import { serverModels } from '@shipwords/jobs/models';
+import catalog from '../site.models';
 
 // Server only: never import this file from pages or components. site.models.ts holds the public part of each entry.
 
@@ -48,9 +48,8 @@ function editPrompt(images: Readonly<Record<string, string>>) {
 
 const CLIP = 'assets/tinydesk/full-17s.mp4';
 
-export default defineModels([
-  {
-    ...tinyDesk,
+export default serverModels(catalog, {
+  'tiny-desk': {
     upstream: 'yir',
     upstreamModel: 'klingai/kling-4.0',
     // Quoted at $3.06 (billed as 18 s), capped at 3.40. A missed swap is not rerun: the job fails with a full refund.
@@ -58,7 +57,6 @@ export default defineModels([
     // Usually about 8 minutes (6 to generate, 2 for the face check and compose), with room for upstream queues.
     timeoutMinutes: 30,
     effect: {
-      ...tinyDesk.effect,
       segments: [
         {
           id: 'full',
@@ -98,4 +96,4 @@ export default defineModels([
       },
     },
   },
-]);
+});

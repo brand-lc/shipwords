@@ -16,6 +16,7 @@ One site per keyword: every site shares `packages/`, and each site under `sites/
 - Pages, components, styles and copy belong to the site. Write the site's `DESIGN.md` before changing styles; each site must look distinct from the others.
 - To reuse something from another site, move it into packages or copy it into this site.
 - Every site must have a DMCA page and a contact email.
+- **Browser boundary:** whatever a page imports ships to the browser. Server-only code and data (prompts, upstream models, cost caps, reference clips) go in `*.server.ts`; `site.models.ts` holds only what pages show and `src/models.server.ts` the rest. Secrets come only from the Worker `env` at runtime, and config reaches the browser only through an allowlisting server function. Reviews check this too. Details: [architecture](docs/architecture.md) §4.
 
 ## 2. Money and auth: strict
 

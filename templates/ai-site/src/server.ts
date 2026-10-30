@@ -3,7 +3,7 @@ import { defineGenerationWorkflow } from '@shipwords/jobs/workflow';
 import handler from '@tanstack/react-start/server-entry';
 import { paraglideMiddleware } from '~/paraglide/server.js';
 import site from '../site.config';
-import models from '../site.models';
+import models from './models.server';
 
 // Worker entry: pages and API go to TanStack Start; also exports the generation Workflow class.
 export const GenerationWorkflow = defineGenerationWorkflow(models, site);

@@ -98,7 +98,7 @@ Agent 会克隆仓库、生成站点并在本地跑起来。它遵守的规则�
 - 域名（Cloudflare Registrar 按成本价出售）。
 - Cloudflare 用量费。需要把多段视频拼接起来的站会用到 Cloudflare Containers，要开 Workers Paid 套餐。
 - 每笔订单的 Stripe 或 PayPal 手续费。
-- Yir 上按次计费的模型费用。每个任务的成本上限在 `site.models.ts` 里设定。
+- Yir 上按次计费的模型费用。每个任务的成本上限在 `src/models.server.ts` 里设定。
 
 ## 仓库结构
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage: node ../../tools/check-site.mjs <site dir> (a site's pnpm check runs it after the build)
-// Checks that a site has the files, routes and policy pages needed to launch, that the build has no zh messages, that site.models.ts holds no effect prompts,
-// and that it imports no other site.
+// Checks that a site has the files, routes and policy pages needed to launch, that the browser bundle has no zh messages, no strings from
+// *.server.ts files and no .dev.vars values, and that the site imports no other site.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -10,6 +10,7 @@ const REQUIRED_FILES = [
   'DESIGN.md',
   'site.config.ts',
   'site.models.ts',
+  'src/models.server.ts',
   'wrangler.jsonc',
   'src/server.ts',
 ];
@@ -50,21 +51,114 @@ function zhMessages(dir) {
   return texts;
 }
 
-function checkBuild(dir) {
-  // Only the browser bundle is checked: leaked messages always land there, while the server bundle keeps source comments that would false-positive.
-  const dist = path.join(dir, 'dist', 'client');
-  const texts = zhMessages(dir);
-  if (!fs.existsSync(dist) || !texts.length) return [];
-  // Match whole strings of at least 4 Han characters, so the dev-only language toggle and short words in shared packages do not hit.
-  for (const file of walk(dist, [], /\.(js|mjs|html)$/)) {
-    const source = fs.readFileSync(file, 'utf8');
-    const hit = texts.find((text) => source.includes(text));
-    if (hit)
-      return [
-        `Build output ${path.relative(dir, file)} contains a zh message (${hit}); production builds should use project.en.inlang only`,
-      ];
+/**
+ * Literal text of every string in a source file, template literals split at ${…}. A small scanner rather than a regex,
+ * so apostrophes in comments and // inside URLs are not mistaken for strings or comments.
+ */
+export function stringLiterals(source) {
+  const out = [];
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '/' && source[i + 1] === '/') {
+      const end = source.indexOf('\n', i);
+      i = end === -1 ? source.length : end;
+    } else if (c === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end === -1 ? source.length : end + 2;
+    } else if (c === "'" || c === '"' || c === '`') {
+      let text = '';
+      i++;
+      while (i < source.length && source[i] !== c) {
+        // An escape ends the run: the bundler may write it differently.
+        if (source[i] === '\\') {
+          out.push(text);
+          text = '';
+          i += 2;
+        } else if (c === '`' && source[i] === '$' && source[i + 1] === '{') {
+          out.push(text);
+          text = '';
+          let depth = 1;
+          i += 2;
+          while (i < source.length && depth) {
+            if (source[i] === '{') depth++;
+            else if (source[i] === '}') depth--;
+            i++;
+          }
+        } else text += source[i++];
+      }
+      out.push(text);
+      i++;
+    } else i++;
   }
-  return [];
+  return out;
+}
+
+// Long enough that shared words and short keys do not hit, short enough to catch asset paths.
+const SERVER_TEXT_MIN = 24;
+
+/**
+ * Text that only server code should hold: runs of at least SERVER_TEXT_MIN characters from string literals in src/**\/*.server.ts(x)
+ * (prompts, reference clips, internal rules). Import protection already stops pages importing those files; this also catches
+ * a string copied into a page. Text both sides need belongs in a shared module that the server file imports.
+ * Runs stop at quotes and escapes, since the bundler may re-quote or re-escape a string.
+ */
+function serverTexts(dir) {
+  const src = path.join(dir, 'src');
+  if (!fs.existsSync(src)) return [];
+  const texts = new Map();
+  for (const file of walk(src).filter((f) => /\.server\.tsx?$/.test(f))) {
+    for (const literal of stringLiterals(fs.readFileSync(file, 'utf8'))) {
+      for (const run of literal.split(/["'`]/)) {
+        if (run.trim().length >= SERVER_TEXT_MIN)
+          texts.set(run, path.relative(dir, file).replaceAll(path.sep, '/'));
+      }
+    }
+  }
+  return [...texts];
+}
+
+/** Values from the local .dev.vars (absent in CI). Only names are ever printed. */
+function devVars(dir) {
+  const file = path.join(dir, '.dev.vars');
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .map((line) => line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/))
+    .filter(Boolean)
+    .map(([, key, value]) => [key, value.replace(/^(['"])(.*)\1$/, '$2')])
+    .filter(([, value]) => value.length >= 8);
+}
+
+function checkBuild(dir) {
+  // Only the browser bundle is checked: that is what ships to visitors, while the server bundle keeps everything by design.
+  const dist = path.join(dir, 'dist', 'client');
+  if (!fs.existsSync(dist)) return [];
+  const zh = zhMessages(dir);
+  const server = serverTexts(dir);
+  // A public value (a site key, the app URL) may sit in .dev.vars and in the page; those are not secrets, so public config is allowed.
+  const secrets = devVars(dir).filter(
+    ([key]) => !/^(APP_URL|EMAIL_FROM|.*_SITE_KEY|.*_CLIENT_ID|.*_PROJECT_ID)$/.test(key),
+  );
+  const problems = [];
+  for (const file of walk(dist, [], /\.(js|mjs|html|css|json|txt|map)$/)) {
+    const source = fs.readFileSync(file, 'utf8');
+    const where = path.relative(dir, file).replaceAll(path.sep, '/');
+    // Match whole strings of at least 4 Han characters, so the dev-only language toggle and short words in shared packages do not hit.
+    const hit = zh.find((text) => source.includes(text));
+    if (hit)
+      problems.push(
+        `Build output ${where} contains a zh message (${hit}); production builds should use project.en.inlang only`,
+      );
+    for (const [text, from] of server.filter(([text]) => source.includes(text)))
+      problems.push(
+        `Build output ${where} contains server-only text from ${from} ("${text.slice(0, 40)}…"); keep it out of files that pages import`,
+      );
+    for (const [key] of secrets.filter(([, value]) => source.includes(value)))
+      problems.push(`Build output ${where} contains the value of ${key} from .dev.vars`);
+  }
+  return problems;
 }
 
 function checkLegal(dir, isTemplate) {
@@ -108,12 +202,6 @@ export function checkSite(dir) {
       problems.push('site.config.ts url is still example.com');
     }
   }
-  // Pages import site.models.ts, so it ships to the browser: effect segments (prompts, reference clips) belong in src/models.server.ts.
-  const modelsFile = path.join(dir, 'site.models.ts');
-  if (fs.existsSync(modelsFile) && /\bsegments\s*:/.test(fs.readFileSync(modelsFile, 'utf8')))
-    problems.push(
-      'site.models.ts defines effect segments; it is bundled into the browser, move them to src/models.server.ts',
-    );
   problems.push(...checkLegal(dir, isTemplate), ...checkBuild(dir));
   for (const file of fs.existsSync(path.join(dir, 'src')) ? walk(path.join(dir, 'src')) : []) {
     const source = fs.readFileSync(file, 'utf8');

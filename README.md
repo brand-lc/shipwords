@@ -98,7 +98,7 @@ The code is free under MIT, including commercial use. What you pay for:
 - Domains (Cloudflare Registrar sells them at cost).
 - Cloudflare usage. Sites that stitch video clips together use Cloudflare Containers and need the Workers Paid plan.
 - Stripe or PayPal fees on each order.
-- Model calls on Yir, billed per request. Each job's maximum cost is set in `site.models.ts`.
+- Model calls on Yir, billed per request. Each job's maximum cost is set in `src/models.server.ts`.
 
 ## Repository layout
 
