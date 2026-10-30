@@ -174,6 +174,8 @@ test('new site: renames, writes README, check-site finds unfinished items', () =
   assert.ok(problems.includes('src/site/legal.tsx SUPPORT_EMAIL is still a placeholder'));
   fs.writeFileSync(path.join(target, 'src', 'bad.ts'), "import x from '../../sites/other/src/x';\n");
   assert.ok(checkSite(target).some((p) => p.includes('imports another site')));
+  fs.appendFileSync(path.join(target, 'site.models.ts'), '// effect: { slots: [], segments: [] }\n');
+  assert.ok(checkSite(target).some((p) => p.includes('effect segments')));
   assert.throws(() => createSite(root, { slug: 'ghibli-photo', template: 'ai-site' }), /already exists/);
   fs.rmSync(root, { recursive: true, force: true });
 });

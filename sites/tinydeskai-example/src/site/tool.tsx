@@ -18,14 +18,14 @@ import { photoTooSmall } from '~/site/photo-check';
 import { formatPrice, PricingLink } from '~/site/pricing';
 import { openSignIn } from '~/site/sign-in';
 import site from '../../site.config';
-import models from '../../site.models';
+import { tinyDesk } from '../../site.models';
 
 // The generator on the home page: a stage image with a round face slot on each of the 5 musicians. Click one to upload a photo.
 // The 5 slots start with 5 dogs (the same cast as the hero dog version; every competitor's sample is people, so dogs set us apart): click a dog to swap in your photo,
 // × on your photo puts the dog back, × on a dog keeps the original coach. At least 1 photo of your own; same price for 1–5 people. Sign in (Google One Tap), then buy credits; no free trial. Design: DESIGN.md "Upload area".
 
-const MODEL = models[0];
-const SLOTS = MODEL.effect?.slots ?? [];
+const MODEL = tinyDesk;
+const SLOTS = MODEL.effect.slots;
 const PRODUCT = site.products.find((p) => p.kind === 'credits' && p.credits === MODEL.credits);
 const PRICE = PRODUCT ? formatPrice(PRODUCT) : '';
 

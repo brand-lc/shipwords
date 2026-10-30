@@ -148,7 +148,9 @@ One state machine is shared by all providers.
 
 ### 6.1 Effects: server-side presets with several segments
 
-An effect is a model entry in `site.models.ts` with an `effect` field: the user only uploads photos, and the server swaps them into fixed reference clips. `createJobs` and `defineGenerationWorkflow` keep their signatures.
+An effect is a model entry with an `effect` field: the user only uploads photos, and the server swaps them into fixed reference clips. `createJobs` and `defineGenerationWorkflow` keep their signatures.
+
+- **Server-only presets:** pages import `site.models.ts`, so it ships to the browser. An effect site keeps only the public part there (id, name, credits, slots); `src/models.server.ts` spreads it and adds the upstream model, cost caps, segments and compose, and `core.server.ts` and `server.ts` import that file. `check-site` fails when `site.models.ts` defines `segments`.
 
 - **Input roles:** `ModelDefinition.referenceRole` (`reference_image` or `first_frame`) says how uploads reach the upstream. Default: `reference_image` for image models, `first_frame` for video models. A video job with any `reference_*` input is sent in Yir's `reference` mode, otherwise in `image` mode.
 - **Slots and segments:** `effect.slots` lists the faces a user can fill (`required` or not); `effect.segments` lists the shots, each with a reference video (R2 key under `assets/` or an https URL), the slots it swaps (in `@image1`, `@image2`… order), a prompt builder and parameters. A segment renders only when at least one of its slots is filled; empty segments fall back to the base footage.

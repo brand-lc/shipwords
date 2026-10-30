@@ -1,5 +1,6 @@
 // Sites declare available models in site.models.ts: public ID, upstream model, credit price, whether guests can try it.
 // Prices are defined only here; frontend display and server-side charging read the same source.
+// site.models.ts ships to the browser, so effect sites keep prompts and reference clips in src/models.server.ts, which spreads the public entry.
 
 export interface ModelDefinition {
   /** The site's model ID, used in URLs and requests. */
@@ -23,7 +24,7 @@ export interface ModelDefinition {
   timeoutMinutes: number;
   /** Role of the user's reference image for the upstream; defaults to reference_image for image models, first_frame for video models. */
   referenceRole?: 'reference_image' | 'first_frame';
-  /** Effects: prompts and reference videos are preset server-side; users only upload photos per slot. */
+  /** Effects: prompts and reference videos are preset server-side (src/models.server.ts, never site.models.ts); users only upload photos per slot. */
   effect?: EffectSpec;
 }
 

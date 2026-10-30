@@ -1,6 +1,8 @@
 import { defineModels } from '@shipwords/jobs/models';
 
 // Models available on this site. credits is charged per job; models with guest: true can be tried free by guests.
+// The tool page imports this file, so all of it ships to the browser. An effect keeps only its public part here (id, name, price, slots)
+// and adds prompts, reference clips and checks in src/models.server.ts, which core.server.ts and server.ts then import instead.
 export default defineModels([
   {
     id: 'nano-banana-pro',

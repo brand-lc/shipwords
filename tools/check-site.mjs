@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Usage: node ../../tools/check-site.mjs <site dir> (a site's pnpm check runs it after the build)
-// Checks that a site has the files, routes and policy pages needed to launch, that the build has no zh messages, and that it imports no other site.
+// Checks that a site has the files, routes and policy pages needed to launch, that the build has no zh messages, that site.models.ts holds no effect prompts,
+// and that it imports no other site.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -107,6 +108,12 @@ export function checkSite(dir) {
       problems.push('site.config.ts url is still example.com');
     }
   }
+  // Pages import site.models.ts, so it ships to the browser: effect segments (prompts, reference clips) belong in src/models.server.ts.
+  const modelsFile = path.join(dir, 'site.models.ts');
+  if (fs.existsSync(modelsFile) && /\bsegments\s*:/.test(fs.readFileSync(modelsFile, 'utf8')))
+    problems.push(
+      'site.models.ts defines effect segments; it is bundled into the browser, move them to src/models.server.ts',
+    );
   problems.push(...checkLegal(dir, isTemplate), ...checkBuild(dir));
   for (const file of fs.existsSync(path.join(dir, 'src')) ? walk(path.join(dir, 'src')) : []) {
     const source = fs.readFileSync(file, 'utf8');
