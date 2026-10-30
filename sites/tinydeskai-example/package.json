@@ -2,6 +2,7 @@
   "name": "@shipwords/site-tinydeskai-example",
   "private": true,
   "type": "module",
+  "devPort": 5020,
   "scripts": {
     "dev": "node ../../tools/dev-port.mjs vite dev",
     "build": "vite build",

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Usage: node ../../tools/dev-port.mjs vite dev
-// Derives a stable port for the site directory, sets PORT and runs the command.
-// The main checkout hashes only the site name, so the port survives moving or re-cloning the repo (and matches on every machine);
-// a git worktree hashes the full path, so several worktrees can pnpm dev at once without clashing. setup:worktree writes the same port to APP_URL.
+// Each site has a fixed port in its package.json ("devPort", 10 apart; new-site assigns the next one). The main checkout
+// uses it as is; a git worktree adds 1-9 from a hash of its path, so worktrees of one site rarely clash and the port
+// still tells which site it is. setup:worktree writes the same port to APP_URL.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -18,10 +18,18 @@ export function isWorktree(dir) {
   }
 }
 
-export function portFor(dir, worktree = isWorktree(dir), base = 5200, span = 2000) {
-  const key = worktree ? path.resolve(dir) : path.basename(path.resolve(dir));
-  const hash = createHash('sha1').update(key.toLowerCase()).digest();
-  return base + (hash.readUInt16BE(0) % span);
+export function sitePort(dir) {
+  const file = path.join(dir, 'package.json');
+  const { devPort } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!Number.isInteger(devPort))
+    throw new Error(`${file} has no devPort; use 10 above the highest one under sites/`);
+  return devPort;
+}
+
+export function portFor(dir, worktree = isWorktree(dir), base = sitePort(dir)) {
+  if (!worktree) return base;
+  const hash = createHash('sha1').update(path.resolve(dir).toLowerCase()).digest();
+  return base + 1 + (hash.readUInt16BE(0) % 9);
 }
 
 if (

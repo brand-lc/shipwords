@@ -15,7 +15,7 @@ A [Yir API key](https://yir.ai/?utm_source=shipwords&utm_medium=docs) (`YIR_API_
 cd sites/<site>
 pnpm db:generate        # after schema changes in packages or in this site
 pnpm db:migrate:local   # apply to the local D1 (.wrangler/state, one per worktree)
-pnpm dev                # port derived from the directory path; worktrees do not collide
+pnpm dev                # the site's devPort from package.json; a worktree adds 1-9
 ```
 
 - Sign-in code emails are not actually sent locally; the Cloudflare plugin prints the message and where it was saved in the terminal.

@@ -6,9 +6,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { checkCrawl, inspectHtml } from './check-crawl.mjs';
 import { checkSite, devVars, stringLiterals } from './check-site.mjs';
-import { isWorktree, portFor } from './dev-port.mjs';
+import { isWorktree, portFor, sitePort } from './dev-port.mjs';
 import { readSiteConfig, readStatus, setVar, TOOLS_ROOT } from './lib.mjs';
-import { createSite, parseArgs, validateSlug } from './new-site.mjs';
+import { createSite, nextDevPort, parseArgs, validateSlug } from './new-site.mjs';
 import { listenArgs, parseVars } from './stripe-listen.mjs';
 
 const crawlHtml = `<html><head><title>Photo studio</title><meta content="Make a video" name="description"><link href="https://example.com" rel="canonical"></head><body><h1>Photo studio</h1><p>One photo. $9.98.</p><script type="application/ld+json">{"@type":"VideoObject","uploadDate":"2026-10-27T15:02:46Z"}</script></body></html>`;
@@ -74,14 +74,15 @@ test('crawl: bounded UA matrix detects challenge, redirect and foreign sitemap',
   await assert.rejects(checkCrawl('https://example.com/path', [], fakeFetch), /HTTPS origin/);
 });
 
-test('dev port: main checkout keyed by site name, worktrees by path', () => {
-  assert.equal(portFor('/a/shipwords/sites/x', false), portFor('/b/elsewhere/sites/x', false));
-  assert.notEqual(portFor('/a/shipwords/sites/x', false), portFor('/a/shipwords/sites/y', false));
-  assert.equal(portFor('/a/wt1/sites/x', true), portFor('/a/wt1/sites/x', true));
-  assert.notEqual(portFor('/a/wt1/sites/x', true), portFor('/a/wt2/sites/x', true));
+test('dev port: main checkout uses the site devPort, worktrees add 1-9 by path', () => {
+  assert.equal(portFor('/a/sites/x', false, 5110), 5110);
+  assert.equal(portFor('/a/wt1/sites/x', true, 5110), portFor('/a/wt1/sites/x', true, 5110));
+  const worktreePorts = ['wt1', 'wt2', 'wt3', 'wt4'].map((wt) => portFor(`/a/${wt}/sites/x`, true, 5110));
+  assert.ok(worktreePorts.every((port) => port > 5110 && port < 5120));
+  assert.ok(new Set(worktreePorts).size > 1);
   assert.equal(isWorktree(TOOLS_ROOT), fs.statSync(path.join(TOOLS_ROOT, '.git')).isFile());
-  const port = portFor('/any', false);
-  assert.ok(port >= 5200 && port < 7200);
+  assert.equal(sitePort(path.join(TOOLS_ROOT, 'templates', 'ai-site')), 5010);
+  assert.throws(() => sitePort(TOOLS_ROOT), /no devPort/);
 });
 
 test('setVar replaces an existing var or appends it', () => {
@@ -309,4 +310,21 @@ test('new site from a vendored shipwords: site lands in the workspace, scripts p
 
 test('the template itself passes check-site', () => {
   assert.deepEqual(checkSite(path.join(TOOLS_ROOT, 'templates', 'ai-site')), []);
+});
+
+test('new site: dev ports are 10 apart from 5110', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipwords-ports-'));
+  assert.equal(nextDevPort(root), 5110);
+  assert.equal(
+    createSite(root, { slug: 'one-tool', template: 'ai-site', templatesRoot: TOOLS_ROOT }).devPort,
+    5110,
+  );
+  const { target, devPort } = createSite(root, {
+    slug: 'two-tool',
+    template: 'ai-site',
+    templatesRoot: TOOLS_ROOT,
+  });
+  assert.equal(devPort, 5120);
+  assert.equal(sitePort(target), 5120);
+  fs.rmSync(root, { recursive: true, force: true });
 });

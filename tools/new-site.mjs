@@ -6,7 +6,8 @@
 // create resources are printed for a human to run.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, TOOLS_ROOT } from './lib.mjs';
+import { sitePort } from './dev-port.mjs';
+import { ROOT, siteDirs, TOOLS_ROOT } from './lib.mjs';
 
 const SKIP = new Set([
   'node_modules',
@@ -28,6 +29,14 @@ export function parseArgs(argv) {
     if (key && key in options) options[key] = rest[i + 1] ?? null;
   }
   return options;
+}
+
+/** Sites get dev ports 10 apart, starting at 5110 (templates and examples sit below). */
+export function nextDevPort(root) {
+  const ports = siteDirs(root)
+    .filter((site) => site.group === 'sites')
+    .map((site) => sitePort(site.dir));
+  return ports.length ? Math.max(...ports) + 10 : 5110;
 }
 
 export function validateSlug(slug) {
@@ -63,6 +72,7 @@ export function createSite(root, options) {
   const target = path.join(root, 'sites', slug);
   if (!fs.existsSync(source)) throw new Error(`Template not found: templates/${template}`);
   if (fs.existsSync(target)) throw new Error(`Site already exists: sites/${slug}`);
+  const devPort = nextDevPort(root);
   copyDir(source, target);
 
   // Sites reference shipwords' tools and package schemas by relative path; repoint them when shipwords is vendored elsewhere.
@@ -74,6 +84,7 @@ export function createSite(root, options) {
   edit(path.join(target, 'package.json'), (text) =>
     text
       .replace(/"name": "[^"]+"/, `"name": "@shipwords/site-${slug}"`)
+      .replace(/"devPort": \d+/, `"devPort": ${devPort}`)
       .replaceAll('../../tools/', `${toolsDir}/`),
   );
   edit(path.join(target, 'wrangler.jsonc'), (text) =>
@@ -130,7 +141,7 @@ Each site should look clearly different from the others. Write this down before 
 - **Avoid**: (anything that looks like your other sites)
 `,
   );
-  return { target, domain, name };
+  return { target, domain, name, devPort };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {

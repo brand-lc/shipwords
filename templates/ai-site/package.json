@@ -2,6 +2,7 @@
   "name": "@shipwords/template-ai-site",
   "private": true,
   "type": "module",
+  "devPort": 5010,
   "scripts": {
     "dev": "node ../../tools/dev-port.mjs vite dev",
     "build": "vite build",
