@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { definePublicModels, serverModels } from '../src/models';
+import { definePublicModels, type EffectSlot, serverModels } from '../src/models';
 
 const catalog = definePublicModels([
   {
@@ -77,6 +77,26 @@ describe('public and server model files', () => {
         },
       }),
     ).toThrow(/slots must match/);
+  });
+
+  it('never lets server fields change what the page shows', () => {
+    // Through a variable, so no excess-property check: the repeated price must still be rejected.
+    const priced = { ...server.image, credits: 99 };
+    expect(() => serverModels(catalog, { ...server, image: priced })).toThrow(
+      /credits belongs in site.models.ts only/,
+    );
+    const withSlots = (slots: EffectSlot[]) => ({
+      ...server,
+      effect: { ...server.effect, effect: { segments: [segment], slots } },
+    });
+    expect(() => serverModels(catalog, withSlots([{ id: 'a', label: 'A', required: false }]))).toThrow(
+      /apart from prep/,
+    );
+    const [, effect] = serverModels(
+      catalog,
+      withSlots([{ id: 'a', label: 'A', required: true, prep: 'Half-body photo' }]),
+    );
+    expect(effect?.effect?.slots).toEqual([{ id: 'a', label: 'A', required: true, prep: 'Half-body photo' }]);
   });
 
   it('still validates presets like defineModels', () => {

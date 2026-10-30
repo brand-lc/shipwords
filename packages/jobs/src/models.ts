@@ -243,13 +243,33 @@ export function serverModels<const T extends readonly PublicModel[]>(
     catalog.map((model): ModelDefinition => {
       const fields = byId[model.id];
       if (!fields) throw new Error(`model ${model.id}: missing from src/models.server.ts`);
+      // A server object passed through a variable escapes the excess-property check, so a repeated price would otherwise win.
+      const repeated = Object.keys(fields).filter(
+        (key) => key !== 'effect' && (PUBLIC_KEYS as readonly string[]).includes(key),
+      );
+      if (repeated.length)
+        throw new Error(`model ${model.id}: ${repeated.join(', ')} belongs in site.models.ts only`);
       if (Boolean(model.effect) !== Boolean(fields.effect))
         throw new Error(`model ${model.id}: effect must be in both site.models.ts and src/models.server.ts`);
-      if (!model.effect || !fields.effect) return { ...model, ...fields, effect: undefined };
-      const slots = fields.effect.slots ?? model.effect.slots;
-      if (slots.map((slot) => slot.id).join() !== model.effect.slots.map((slot) => slot.id).join())
-        throw new Error(`model ${model.id}: server effect slots must match site.models.ts`);
-      return { ...model, ...fields, effect: { ...fields.effect, slots } };
+      if (!model.effect || !fields.effect) return { ...fields, ...model, effect: undefined };
+      // Server slots may only add prep prompts; everything the page shows must match site.models.ts.
+      const publicSlots = model.effect.slots;
+      const serverSlots = fields.effect.slots;
+      if (
+        serverSlots &&
+        (serverSlots.length !== publicSlots.length ||
+          serverSlots.some(
+            (slot, i) =>
+              slot.id !== publicSlots[i]?.id ||
+              slot.label !== publicSlots[i]?.label ||
+              slot.required !== publicSlots[i]?.required,
+          ))
+      )
+        throw new Error(`model ${model.id}: server effect slots must match site.models.ts apart from prep`);
+      const slots = serverSlots
+        ? publicSlots.map((slot, i) => ({ ...slot, prep: serverSlots[i]?.prep }))
+        : publicSlots;
+      return { ...fields, ...model, effect: { ...fields.effect, slots } };
     }),
   );
 }

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { checkCrawl, inspectHtml } from './check-crawl.mjs';
-import { checkSite } from './check-site.mjs';
+import { checkSite, devVars, stringLiterals } from './check-site.mjs';
 import { isWorktree, portFor } from './dev-port.mjs';
 import { readSiteConfig, readStatus, setVar, TOOLS_ROOT } from './lib.mjs';
 import { createSite, parseArgs, validateSlug } from './new-site.mjs';
@@ -202,6 +202,43 @@ test('check-site: fails when the browser bundle contains zh messages', () => {
   assert.ok(!checkSite(dir).some((p) => p.includes('zh message')));
   fs.writeFileSync(path.join(dir, 'dist', 'client', 'b.js'), 'const s = "\u9000\u51fa\u767b\u5f55";');
   assert.ok(checkSite(dir).some((p) => p.includes('zh message')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('check-site: string scanner reads strings inside template interpolations, and .dev.vars is read as dotenv', () => {
+  const source = [
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text containing template literals
+    'const p = (dog) => `${dog ? "Replace the singer with the dog" : `keep ${"the original coach"}`} now`;',
+    "const o = { a: { b: 'after nested braces' } }; // it's a comment",
+    "const u = 'https://example.com/x';",
+  ].join('\n');
+  assert.deepEqual(
+    stringLiterals(source).filter((s) => s.trim()),
+    [
+      'Replace the singer with the dog',
+      'keep ',
+      'the original coach',
+      ' now',
+      'after nested braces',
+      'https://example.com/x',
+    ],
+  );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipwords-'));
+  fs.writeFileSync(
+    path.join(dir, '.dev.vars'),
+    [
+      'export YIR_API_KEY="fake-secret-key-123456"',
+      'STRIPE_SECRET_KEY=sk_test_abcdefgh # local test',
+      "GOOGLE_CLIENT_SECRET='has # inside quotes'",
+      '# COMMENTED=not-a-value-at-all',
+      'SHORT=abc',
+    ].join('\r\n'),
+  );
+  assert.deepEqual(devVars(dir), [
+    ['YIR_API_KEY', 'fake-secret-key-123456'],
+    ['STRIPE_SECRET_KEY', 'sk_test_abcdefgh'],
+    ['GOOGLE_CLIENT_SECRET', 'has # inside quotes'],
+  ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

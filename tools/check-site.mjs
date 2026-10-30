@@ -52,45 +52,55 @@ function zhMessages(dir) {
 }
 
 /**
- * Literal text of every string in a source file, template literals split at ${…}. A small scanner rather than a regex,
- * so apostrophes in comments and // inside URLs are not mistaken for strings or comments.
+ * Literal text of every string in a source file, template literals split at ${…} and the code inside scanned too.
+ * A small scanner rather than a regex, so apostrophes in comments and // inside URLs are not mistaken for strings or comments.
  */
-function stringLiterals(source) {
+export function stringLiterals(source) {
   const out = [];
   let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === '/' && source[i + 1] === '/') {
-      const end = source.indexOf('\n', i);
-      i = end === -1 ? source.length : end;
-    } else if (c === '/' && source[i + 1] === '*') {
-      const end = source.indexOf('*/', i + 2);
-      i = end === -1 ? source.length : end + 2;
-    } else if (c === "'" || c === '"' || c === '`') {
-      let text = '';
-      i++;
-      while (i < source.length && source[i] !== c) {
-        // An escape ends the run: the bundler may write it differently.
-        if (source[i] === '\\') {
-          out.push(text);
-          text = '';
-          i += 2;
-        } else if (c === '`' && source[i] === '$' && source[i + 1] === '{') {
-          out.push(text);
-          text = '';
-          let depth = 1;
-          i += 2;
-          while (i < source.length && depth) {
-            if (source[i] === '{') depth++;
-            else if (source[i] === '}') depth--;
-            i++;
-          }
-        } else text += source[i++];
+  // Code up to the } that closes a ${…} (nested), or to the end of the file (top level).
+  const code = (nested) => {
+    let depth = 0;
+    while (i < source.length) {
+      const c = source[i];
+      if (c === '/' && source[i + 1] === '/') {
+        const end = source.indexOf('\n', i);
+        i = end === -1 ? source.length : end;
+      } else if (c === '/' && source[i + 1] === '*') {
+        const end = source.indexOf('*/', i + 2);
+        i = end === -1 ? source.length : end + 2;
+      } else if (c === "'" || c === '"' || c === '`') string(c);
+      else if (c === '{') {
+        depth++;
+        i++;
+      } else if (c === '}' && nested && depth === 0) return;
+      else {
+        if (c === '}') depth--;
+        i++;
       }
-      out.push(text);
-      i++;
-    } else i++;
-  }
+    }
+  };
+  const string = (quote) => {
+    let text = '';
+    i++;
+    while (i < source.length && source[i] !== quote) {
+      // An escape ends the run: the bundler may write it differently.
+      if (source[i] === '\\') {
+        out.push(text);
+        text = '';
+        i += 2;
+      } else if (quote === '`' && source[i] === '$' && source[i + 1] === '{') {
+        out.push(text);
+        text = '';
+        i += 2;
+        code(true);
+        i++;
+      } else text += source[i++];
+    }
+    out.push(text);
+    i++;
+  };
+  code(false);
   return out;
 }
 
@@ -118,16 +128,22 @@ function serverTexts(dir) {
   return [...texts];
 }
 
-/** Values from the local .dev.vars (absent in CI). Only names are ever printed. */
-function devVars(dir) {
+/**
+ * Values from the local .dev.vars (absent in CI), read as dotenv does: optional export prefix, quoted values kept whole,
+ * a # after whitespace starts a comment in unquoted ones. Only names are ever printed.
+ */
+export function devVars(dir) {
   const file = path.join(dir, '.dev.vars');
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, 'utf8')
-    .split('\n')
-    .map((line) => line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/))
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*(?:export\s+)?([\w.-]+)\s*=\s*(.*)$/))
     .filter(Boolean)
-    .map(([, key, value]) => [key, value.replace(/^(['"])(.*)\1$/, '$2')])
+    .map(([, key, raw]) => {
+      const quoted = raw.match(/^(['"`])([\s\S]*?)\1/);
+      return [key, quoted ? quoted[2] : raw.replace(/\s+#.*$/, '').trim()];
+    })
     .filter(([, value]) => value.length >= 8);
 }
 
