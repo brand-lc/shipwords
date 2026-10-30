@@ -84,7 +84,8 @@ export interface EffectSegment {
   check?: EffectCheck;
   /**
    * Repair (needs check and cuts, and compose with this as the only segment): when the check still finds original people, re-render the shots
-   * they appear in with a video replace model instead of refunding, then check again; after `rounds` passes the job fails with a refund.
+   * they appear in with a video replace model instead of refunding, then check again; after `rounds` passes the job fails with a refund,
+   * or delivers the best version when `onMiss` is 'deliver'.
    */
   repair?: EffectRepair;
 }
@@ -102,6 +103,12 @@ export interface EffectRepair {
   maxCost: string;
   /** Most passes per job (1–5); every pass counts toward the model's maxCost. */
   rounds: number;
+  /**
+   * When the passes can't replace everyone (they run out, the model rejects or fails one, or no pass covers a missed slot):
+   * 'refund' (default) fails the job swap_not_applied with a refund; 'deliver' delivers the version with the fewest missed people
+   * and keeps the credits, for sites that stop refunding once the paid render has been charged.
+   */
+  onMiss?: 'refund' | 'deliver';
   /** Slots visible in each shot, one entry per shot (cuts split the segment into cuts.length + 1 shots); a pass on a slot covers every shot it is in. */
   shots: readonly (readonly string[])[];
   /**

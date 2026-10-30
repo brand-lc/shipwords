@@ -506,7 +506,8 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
    * shares the original clip's timeline). Each pass cuts the shots of one missed slot out of the composed video, has the replace model
    * re-render them with the photos, puts them back and checks every filled slot again; nextRepairPass picks whole frame or one person's box.
    * The upstream tasks are recorded after the segments, so cancel, abort and cost cover them. When the passes run out, the model rejects
-   * or fails a pass, or nothing is left that a pass can cover, the job fails swap_not_applied with a refund.
+   * or fails a pass, or nothing is left that a pass can cover, the job fails swap_not_applied with a refund; under repair.onMiss
+   * 'deliver' it delivers the best checked version instead, and so on a timeout or a check error during the passes.
    * Returns the delivered outputs (the compose keys, overwritten), or null if the job has ended.
    */
   const repairOutputs = async (
@@ -517,7 +518,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     composed: StoredOutput[],
   ): Promise<StoredOutput[] | null> => {
     let missed = initial;
-    const giveUp = (why: string) =>
+    const notApplied = (why: string) => () =>
       fail(
         'swap_not_applied',
         `${partId} still shows an original face after repair (${why}): ${missed.join(', ')}`.slice(0, 500),
@@ -528,7 +529,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const repair = segment?.repair;
     const compose = effect?.compose;
     if (!segment?.cuts || !repair || !compose || !check.original || !check.faces) {
-      await giveUp('repair is no longer configured');
+      await notApplied('repair is no longer configured')();
       return null;
     }
     const { width, height, fps } = compose;
@@ -536,6 +537,47 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const passes: RepairPass[] = [];
     let current = composed[0]!.key;
     let silent = composed[1]!.key;
+    /** Copy a version over the compose keys (the delivered outputs). */
+    const deliver = (stepName: string, song: string, quiet: string) =>
+      step.do(stepName, async () => {
+        for (const [output, source] of [
+          [composed[0]!, song],
+          [composed[1]!, quiet],
+        ] as const) {
+          if (source === output.key) continue;
+          const object = await deps.bucket.get(source);
+          if (!object) throw new Error(`repair output missing: ${source}`);
+          await deps.bucket.put(output.key, await object.arrayBuffer(), {
+            httpMetadata: { contentType: 'video/mp4' },
+          });
+        }
+        return true;
+      });
+    // The checked version with the fewest missed people so far; a tie keeps the earlier one.
+    let best = { song: current, silent, missed: initial.length };
+    /**
+     * The passes can't finish the swap. By default the job fails (`failure`, with a refund); under onMiss 'deliver' the paid render
+     * has been charged, so the best checked version is delivered and the credits are kept.
+     */
+    const giveUp = async (why: string, failure: () => Promise<unknown>): Promise<StoredOutput[] | null> => {
+      if (repair.onMiss !== 'deliver') {
+        await failure();
+        return null;
+      }
+      deps.log?.('repair gave up, delivering the best version', {
+        jobId,
+        part: partId,
+        why,
+        missed: best.missed,
+      });
+      // A pass can still be running upstream (the deadline passed while polling it): cancel it as a failure would, so it stops billing.
+      await step.do(`repair:${partId}:cancel-passes`, async () => {
+        const row = await loadJob(deps.db, jobId);
+        if (row) await cancelAll(adapter, upstreamIds(row));
+        return true;
+      });
+      return (await deliver(`repair:${partId}:deliver-best`, best.song, best.silent)) ? composed : null;
+    };
     for (let round = 0; round < repair.rounds; round++) {
       const label = `repair:${partId}:${round}`;
       const job = await step.do(`${label}:plan`, async () => {
@@ -548,10 +590,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
       });
       if (!job) return null;
       const pass = nextRepairPass(repair, job.slots, missed, passes);
-      if (!pass) {
-        await giveUp('no pass covers them');
-        return null;
-      }
+      if (!pass) return giveUp('no pass covers them', notApplied('no pass covers them'));
       passes.push(pass);
       const ranges = shotFrames(segment.cuts, segment.target!, fps, pass.shots);
       const cut = {
@@ -603,23 +642,17 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
         }
       });
       if ('done' in submitted) return null;
-      if ('timeout' in submitted) {
-        await timeOut();
-        return null;
-      }
+      if ('timeout' in submitted) return giveUp('timed out', timeOut);
       if ('rejected' in submitted) {
-        await giveUp(`pass ${round} rejected: ${submitted.rejected}`);
-        return null;
+        const why = `pass ${round} rejected: ${submitted.rejected}`;
+        return giveUp(why, notApplied(why));
       }
       const result = await pollUntilDone(submitted.upstreamJobId, label);
       if (result.state === 'stopped') return null;
-      if (result.state === 'timeout') {
-        await timeOut();
-        return null;
-      }
+      if (result.state === 'timeout') return giveUp('timed out', timeOut);
       if (result.state === 'failed' || !result.files[0]) {
-        await giveUp(`pass ${round} failed: ${result.state === 'failed' ? result.code : 'no output'}`);
-        return null;
+        const why = `pass ${round} failed: ${result.state === 'failed' ? result.code : 'no output'}`;
+        return giveUp(why, notApplied(why));
       }
       const file = result.files[0];
       const patchKey = await step.do(`${label}:store`, async () => {
@@ -656,33 +689,21 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
           }),
         )
         .catch((error: unknown) => ({ errored: String(error) }));
-      if ('errored' in scores) {
-        await fail(
-          'check_failed',
-          `${partId} repair ${round} could not be checked: ${scores.errored}`.slice(0, 500),
+      // An unchecked video may have lost people the last check passed, so it is never delivered; best is the last checked version.
+      if ('errored' in scores)
+        return giveUp(`pass ${round} could not be checked`, () =>
+          fail(
+            'check_failed',
+            `${partId} repair ${round} could not be checked: ${scores.errored}`.slice(0, 500),
+          ),
         );
-        return null;
-      }
       deps.log?.('repair pass checked', { jobId, part: partId, round, pass, scores });
       missed = slots.filter((_, i) => scores[i]! >= check.maxSimilarity);
+      if (missed.length < best.missed) best = { song: current, silent, missed: missed.length };
       if (missed.length > 0) continue;
-      const delivered = await step.do(`${label}:deliver`, async () => {
-        for (const [output, source] of [
-          [composed[0]!, current],
-          [composed[1]!, silent],
-        ] as const) {
-          const object = await deps.bucket.get(source);
-          if (!object) throw new Error(`repair output missing: ${source}`);
-          await deps.bucket.put(output.key, await object.arrayBuffer(), {
-            httpMetadata: { contentType: 'video/mp4' },
-          });
-        }
-        return true;
-      });
-      return delivered ? composed : null;
+      return (await deliver(`${label}:deliver`, current, silent)) ? composed : null;
     }
-    await giveUp(`${repair.rounds} passes`);
-    return null;
+    return giveUp(`${repair.rounds} passes`, notApplied(`${repair.rounds} passes`));
   };
 
   // Run prep segments first, then video segments (which use the prep results). Within a phase, submit one by one so segments render upstream in parallel, then poll in turn.

@@ -1197,6 +1197,150 @@ describe('effect compose', () => {
       expect((await getBalance(db, userId)).available).toBe(50);
     });
 
+    describe("onMiss 'deliver': the paid render was charged, so a miss delivers instead of refunding", () => {
+      const deliverModels = defineModels([
+        {
+          ...repairModel,
+          effect: {
+            ...repairModel.effect!,
+            segments: [{ ...band, repair: { ...repair, onMiss: 'deliver' } }],
+          },
+        },
+      ]);
+      const deliverDeps = (adapter: FakeAdapter, composer: FakeComposer) => ({
+        ...repairDeps(adapter, composer),
+        models: deliverModels,
+      });
+
+      it('passes run out: the checked version with the fewest missed people is delivered, credits kept, every pass recorded', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        const composer = new FakeComposer();
+        // The render misses edge and solo; pass 0 fixes solo; passes 1 and 2 each lose someone again.
+        composer.scores = [
+          [0.3, 0.8, 0.9],
+          [0.3, 0.8, 0.2],
+          [0.9, 0.8, 0.2],
+          [0.3, 0.8, 0.9],
+        ];
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+        expect(adapter.submits).toHaveLength(4);
+        const job = await loadJob(db, jobId);
+        expect(job).toMatchObject({ status: 'succeeded', errorCode: null });
+        expect(job!.upstreamJobId!.split(',')).toHaveLength(4);
+        expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([10]));
+        expect(await bytesOf(`jobs/${jobId}/2.mp4`)).toEqual(new Uint8Array([20]));
+        expect((await getBalance(db, userId)).available).toBe(40);
+        // Settlement runs again on a replay or a late failure write: a succeeded job never refunds.
+        await markFailed(db, jobId, 'failed', 'late', 'late');
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
+      it('a pass is rejected, fails upstream or times out before any pass lands: the render itself is delivered, credits kept', async () => {
+        for (const setup of [
+          (adapter: FakeAdapter, _: string, __: FakeComposer) => {
+            adapter.submitErrors = [null, new UpstreamError('content_rejected', 'no', false)];
+          },
+          (adapter: FakeAdapter, jobId: string, _: FakeComposer) =>
+            adapter.polls.set(`up_${jobId}:band:repair:0`, [
+              { state: 'failed', code: 'nsfw', message: 'no' },
+            ]),
+          // The deadline passes while the render is composed, so the first pass is never submitted.
+          (_: FakeAdapter, __: string, composer: FakeComposer) => {
+            const compose = composer.compose.bind(composer);
+            composer.compose = async (input) => {
+              const late = Date.now() + 2 * 60 * 60_000;
+              vi.spyOn(Date, 'now').mockReturnValue(late);
+              return compose(input);
+            };
+          },
+        ]) {
+          const { userId, jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          setup(adapter, jobId, composer);
+          composer.scores = [[0.3, 0.8, 0.2]];
+          await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+          vi.restoreAllMocks();
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+          expect(composer.patches).toHaveLength(0);
+          expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+          expect(await bytesOf(`jobs/${jobId}/2.mp4`)).toEqual(new Uint8Array([2]));
+          expect((await getBalance(db, userId)).available).toBe(40);
+        }
+      });
+
+      it('the deadline passes while a pass renders: the pass is canceled upstream, the render is delivered, credits kept', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        adapter.polls.set(`up_${jobId}:band:repair:0`, []);
+        adapter.onSubmit = async (key) => {
+          if (key.endsWith(':repair:0')) vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 60 * 60_000);
+        };
+        const composer = new FakeComposer();
+        composer.scores = [[0.3, 0.8, 0.2]];
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+        vi.restoreAllMocks();
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        expect(adapter.cancelled).toContain(`up_${jobId}:band:repair:0`);
+        expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
+      it('the check of a repaired video errors: the last checked version is delivered, never the unchecked one', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        const composer = new FakeComposer();
+        composer.scores = [
+          [0.3, 0.8, 0.9],
+          [0.3, 0.8, 0.2],
+        ];
+        const faces = composer.faces.bind(composer);
+        composer.faces = async (input) => {
+          if (input.key.includes('repair-band-1')) throw new Error('container cold');
+          return faces(input);
+        };
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        expect(adapter.submits).toHaveLength(3);
+        expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([10]));
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
+      it('replay after an interruption while delivering: no pass runs twice, the job finishes once', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        const composer = new FakeComposer();
+        composer.scores = [0, 1, 2, 3].map(() => [0.3, 0.8, 0.2]);
+        const cache = new Map<string, unknown>();
+        const crashing: StepRunner = {
+          async do(name, fn) {
+            if (name === 'repair:band:deliver-best' || name === 'abort' || name === 'settle')
+              throw new Error('stop here');
+            if (cache.has(name)) return cache.get(name) as never;
+            const value = await fn();
+            cache.set(name, value);
+            return value;
+          },
+          async sleep() {},
+        };
+        await expect(runGeneration(deliverDeps(adapter, composer), jobId, crashing)).rejects.toThrow();
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps(cache));
+        expect(adapter.submits).toHaveLength(4);
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
+      it('a cancel during the passes still refunds: delivery only replaces the miss refund', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        adapter.polls.set(`up_${jobId}:band:repair:0`, []);
+        adapter.onSubmit = async (key) => {
+          if (key.endsWith(':repair:0')) await markFailed(db, jobId, 'canceled', 'canceled', 'by user');
+        };
+        const composer = new FakeComposer();
+        composer.scores = [[0.3, 0.8, 0.2]];
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'canceled' });
+        expect((await getBalance(db, userId)).available).toBe(50);
+      });
+    });
+
     it('config validation: needs check, cuts and a single composed segment; shots per cut; at most 3 people per pass; boxes inside the frame; passes count toward the cap', () => {
       const withRepair =
         (patch: Partial<EffectSegment>, extra: Partial<ModelDefinition> = {}) =>
