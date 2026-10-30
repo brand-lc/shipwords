@@ -33,7 +33,7 @@ export default defineSite({
       creditsPerPeriod: 600,
     },
   ],
-  signup: { bonusCredits: 20, bonusExpiresDays: 30, bonusPerIpDaily: 3 },
+  signup: { bonusCredits: 20, bonusExpiresDays: 30, bonusPerIpDaily: 3, bonusSiteDaily: 100 },
   guest: { dailyPerDevice: 2, dailyPerIp: 4, dailySiteBudget: 200, minRecaptchaScore: 0.5 },
   billing: { provider: 'stripe', automaticTax: false },
   analytics: {},

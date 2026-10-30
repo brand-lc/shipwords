@@ -53,7 +53,7 @@ const site = defineSite({
       creditsPerPeriod: 300,
     },
   ],
-  signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 3 },
+  signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 3, bonusSiteDaily: 100 },
   guest: { dailyPerDevice: 1, dailyPerIp: 3, dailySiteBudget: 100, minRecaptchaScore: 0.5 },
   billing: { provider: 'stripe', automaticTax: false },
 });

@@ -177,7 +177,7 @@ An effect is a model entry with an `effect` field: the user only uploads photos,
 - A captcha only raises the cost of abuse; solving services are cheap. The real backstop is the quota and the daily site budget.
 - Failed guest jobs return their quota; cancelled ones don't, since the upstream may already have charged for them.
 - Guest results are attached to the new account after sign-in.
-- The sign-up bonus requires a verified email and blocks disposable domains, with a per-IP daily limit.
+- The sign-up bonus requires a verified email and blocks disposable domains, with a per-IP daily limit (`signup.bonusPerIpDaily`) and a site-wide daily limit (`signup.bonusSiteDaily`). The site-wide limit caps the daily cost of farming bonuses with fresh emails and rotating IPs; past it, sign-up still works but grants nothing that day.
 
 ## 8. Testing
 

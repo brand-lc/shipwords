@@ -55,6 +55,8 @@ export interface SiteConfig {
     bonusExpiresDays: number | null;
     /** Max new accounts per IP per day that receive the sign-up bonus. */
     bonusPerIpDaily: number;
+    /** Max new accounts per UTC day, site-wide, that receive the sign-up bonus; caps the daily cost of bonus farming. */
+    bonusSiteDaily: number;
   };
   guest: GuestQuota;
   billing:

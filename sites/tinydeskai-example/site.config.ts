@@ -36,7 +36,7 @@ export default defineSite({
       expiresDays: null,
     },
   ],
-  signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 0 },
+  signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 0, bonusSiteDaily: 0 },
   guest: { dailyPerDevice: 0, dailyPerIp: 0, dailySiteBudget: 0, minRecaptchaScore: 0.5 },
   billing: { provider: 'stripe', automaticTax: false },
   analytics: {},

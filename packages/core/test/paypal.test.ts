@@ -241,7 +241,7 @@ describe('PayPal field mapping', () => {
       url: 'https://t.example',
       locales: ['en'],
       defaultLocale: 'en',
-      signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 1 },
+      signup: { bonusCredits: 0, bonusExpiresDays: null, bonusPerIpDaily: 1, bonusSiteDaily: 100 },
       guest: { dailyPerDevice: 1, dailyPerIp: 1, dailySiteBudget: 1, minRecaptchaScore: 0.5 },
       billing: { provider: 'paypal' as const },
     };
