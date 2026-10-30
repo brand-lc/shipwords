@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { grantCredits } from '../credits/ledger';
 import type { Db } from '../db/client';
 import * as schema from '../db/schema';
+import { emailCopy } from '../email/copy';
 import type { CoreEnv } from '../env';
 import { clientIp, ipBucket } from '../http';
 import { consumeQuota, dayWindow } from '../quota/counters';
@@ -128,9 +129,7 @@ export function createAuth(deps: AuthDeps) {
           await env.EMAIL.send({
             to: email,
             from: { email: env.EMAIL_FROM, name: site.name },
-            subject: `${otp} is your ${site.name} code`,
-            text: `Your ${site.name} sign-in code is ${otp}. It expires in 10 minutes.`,
-            html: `<p>Your ${site.name} sign-in code is <strong style="font-size:20px">${otp}</strong>.</p><p>It expires in 10 minutes.</p>`,
+            ...emailCopy(site.defaultLocale).signInCode({ siteName: site.name, otp }),
           });
         },
       }),

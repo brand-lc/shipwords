@@ -249,11 +249,42 @@ describe('running a music job', () => {
         send: async (message: { subject: string }) => void sent.push(message),
       } as unknown as SendEmail,
       from: 'no-reply@music.test',
-      site: { name: 'Music' },
+      site: { name: 'Music', defaultLocale: 'en' },
       baseURL: BASE,
     });
     await runGeneration({ ...deps(adapter), notify }, job.id, steps);
     expect(sent.map((message) => message.subject)).toEqual(['Your Music song is ready']);
+  });
+
+  it('a Japanese site sends the finish emails in Japanese', async () => {
+    const sent: { subject: string; text: string }[] = [];
+    const notify = emailOnFinish({
+      db,
+      email: {
+        send: async (message: { subject: string; text: string }) => void sent.push(message),
+      } as unknown as SendEmail,
+      from: 'no-reply@music.test',
+      site: { name: 'AI作曲', defaultLocale: 'ja' },
+      baseURL: BASE,
+    });
+    const ok = await queued();
+    await db.insert(user).values({ id: ok.userId, name: 'U', email: `${ok.userId}@example.com` });
+    const adapter = new FakeAdapter();
+    adapter.polls = [{ state: 'succeeded', files: [{ url: 'https://up/a.mp3', mediaType: 'audio/mpeg' }] }];
+    await runGeneration({ ...deps(adapter), notify }, ok.job.id, steps);
+
+    const bad = await queued();
+    await db.insert(user).values({ id: bad.userId, name: 'U', email: `${bad.userId}@example.com` });
+    const failing = new FakeAdapter();
+    failing.polls = [{ state: 'failed', code: 'YIR_EXECUTION_FAILED', message: 'down' }];
+    await runGeneration({ ...deps(failing), notify }, bad.job.id, steps);
+
+    expect(sent.map((message) => message.subject)).toEqual([
+      'AI作曲：曲ができました',
+      'AI作曲：曲を作れませんでした',
+    ]);
+    expect(sent[0]!.text).toContain(`${BASE}/files/jobs/${ok.job.id}/0.mp3`);
+    expect(sent[1]!.text).toContain(`使った${bad.job.costCredits}クレジットはアカウントに戻っています`);
   });
 });
 

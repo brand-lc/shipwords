@@ -134,7 +134,7 @@ describe('generation jobs', () => {
       db,
       email,
       from: 'noreply@example.com',
-      site: { name: 'Demo' },
+      site: { name: 'Demo', defaultLocale: 'en' },
       baseURL: 'https://demo.test',
     });
     const adapter = new FakeAdapter();
@@ -199,7 +199,7 @@ describe('generation jobs', () => {
       db,
       email,
       from: 'noreply@example.com',
-      site: { name: 'Demo' },
+      site: { name: 'Demo', defaultLocale: 'en' },
       baseURL: 'https://demo.test',
     });
     const adapter = new FakeAdapter();
