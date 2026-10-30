@@ -38,6 +38,15 @@ describe('quota counters', () => {
     expect(results.filter(Boolean)).toHaveLength(3);
   });
 
+  it('rolls back earlier counts when a later write throws', async () => {
+    const a = { key: `t:${crypto.randomUUID()}`, window: 'w', limit: 1 };
+    // A null key violates NOT NULL, so the second write throws after the first one counted.
+    const broken = { key: null as unknown as string, window: 'w', limit: 1 };
+    await expect(consumeQuota(db, [a, broken])).rejects.toThrow();
+    // a was rolled back, so its only slot is still free.
+    expect(await consumeQuota(db, [a])).toBe(true);
+  });
+
   it('rejects immediately when the limit is 0', async () => {
     expect(await consumeQuota(db, [{ key: 'zero', window: 'w', limit: 0 }])).toBe(false);
   });

@@ -36,16 +36,25 @@ async function decrement(db: Db, rule: QuotaRule) {
 
 /**
  * Increments each rule in turn; if any is at its limit, rolls back earlier increments and returns false.
+ * A write that throws rolls them back too before rethrowing, so a failed request never keeps a count.
  * Each increment is a single conditional upsert, so concurrency can't exceed the limit.
  */
 export async function consumeQuota(db: Db, rules: QuotaRule[]): Promise<boolean> {
   const done: QuotaRule[] = [];
+  const rollback = () => Promise.all(done.map((previous) => decrement(db, previous)));
   for (const rule of rules) {
-    if (await increment(db, rule)) {
+    let ok: boolean;
+    try {
+      ok = await increment(db, rule);
+    } catch (error) {
+      await rollback();
+      throw error;
+    }
+    if (ok) {
       done.push(rule);
       continue;
     }
-    await Promise.all(done.map((previous) => decrement(db, previous)));
+    await rollback();
     return false;
   }
   return true;
