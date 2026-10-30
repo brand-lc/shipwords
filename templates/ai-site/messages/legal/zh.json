@@ -31,7 +31,7 @@
   "legal_refunds_title": "退款政策",
   "legal_refunds_intro": "TODO：这页为 {siteName} 说明什么。",
   "legal_refunds_failed_heading": "生成失败",
-  "legal_refunds_failed_body": "TODO：积分自动退回。",
+  "legal_refunds_failed_body": "TODO：只有什么都没做出来（模型失败或拒绝）才自动退积分。模型一旦做出了东西，就交付并扣积分，即使不完美；明显坏掉的结果可邮件申请退款。",
   "legal_refunds_unused_heading": "未用积分",
   "legal_refunds_unused_body": "TODO：退款期限和条件。",
   "legal_refunds_ask_heading": "怎么申请",

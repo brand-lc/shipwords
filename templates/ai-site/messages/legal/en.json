@@ -31,7 +31,7 @@
   "legal_refunds_title": "Refund policy",
   "legal_refunds_intro": "TODO: what this page covers for {siteName}.",
   "legal_refunds_failed_heading": "Failed generations",
-  "legal_refunds_failed_body": "TODO: credits come back automatically.",
+  "legal_refunds_failed_body": "TODO: credits come back automatically only when nothing could be made (the model failed or refused). Once the model has made something, the result is delivered and uses its credits, even if it isn't perfect; a result that is clearly broken can be refunded by email.",
   "legal_refunds_unused_heading": "Unused credits",
   "legal_refunds_unused_body": "TODO: refund window and conditions.",
   "legal_refunds_ask_heading": "How to ask",

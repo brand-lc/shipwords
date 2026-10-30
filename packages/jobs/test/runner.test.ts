@@ -5,7 +5,7 @@ import { user } from '@shipwords/core/db/schema';
 import { consumeQuota } from '@shipwords/core/quota/counters';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { loadJob, markFailed, markSucceeded, spendKey } from '../src/lifecycle';
+import { cancelQueued, loadJob, markFailed, markSubmitted, markSucceeded, spendKey } from '../src/lifecycle';
 import { defineModels } from '../src/models';
 import { emailOnFinish } from '../src/notify';
 import { runGeneration, type StepRunner, sumUsd } from '../src/runner';
@@ -42,9 +42,12 @@ class FakeAdapter implements UpstreamAdapter {
   polls: PollResult[] = [];
   cancelled: string[] = [];
   submitError: Error | null = null;
+  /** Runs after the upstream accepted the task, before the runner records it (to land a cancel in between). */
+  onSubmit: (() => Promise<void>) | null = null;
   async submit(input: SubmitInput, key: string) {
     if (this.submitError) throw this.submitError;
     this.submits.push({ input, key });
+    await this.onSubmit?.();
     return { upstreamJobId: `up_${key}` };
   }
   async poll() {
@@ -270,6 +273,40 @@ describe('generation jobs', () => {
     await markFailed(db, second.jobId, 'canceled', 'canceled', 'late cancel');
     expect((await loadJob(db, second.jobId))?.status).toBe('succeeded');
     expect((await getBalance(db, second.userId)).available).toBe(40);
+  });
+
+  it('user cancel before the upstream: canceled and refunded once; the Workflow then submits nothing', async () => {
+    const { userId, jobId } = await paidJob();
+    expect(await cancelQueued(db, jobId)).toMatchObject({ status: 'canceled', errorCode: 'canceled' });
+    expect(await cancelQueued(db, jobId)).toMatchObject({ status: 'canceled' });
+    const adapter = new FakeAdapter();
+    await runGeneration(deps(adapter), jobId, immediateSteps());
+    expect(adapter.submits).toHaveLength(0);
+    expect((await getBalance(db, userId)).available).toBe(50);
+  });
+
+  it('user cancel once the upstream has the job: nothing changes, no refund, the job still delivers', async () => {
+    const { userId, jobId } = await paidJob();
+    await markSubmitted(db, jobId, `up_${jobId}`);
+    expect(await cancelQueued(db, jobId)).toMatchObject({ status: 'submitted', errorCode: null });
+    expect((await getBalance(db, userId)).available).toBe(40);
+    const adapter = new FakeAdapter();
+    adapter.polls = [{ state: 'succeeded', files: [{ url: 'https://up/x.png', mediaType: 'image/png' }] }];
+    await runGeneration(deps(adapter), jobId, immediateSteps());
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+    expect((await getBalance(db, userId)).available).toBe(40);
+  });
+
+  it('cancel lands while the first submit is in flight: the cancel wins, the just-submitted task is canceled, refunded once', async () => {
+    const { userId, jobId } = await paidJob();
+    const adapter = new FakeAdapter();
+    adapter.onSubmit = async () => {
+      await cancelQueued(db, jobId);
+    };
+    await runGeneration(deps(adapter), jobId, immediateSteps());
+    expect(await loadJob(db, jobId)).toMatchObject({ status: 'canceled' });
+    expect(adapter.cancelled).toEqual([`up_${jobId}`]);
+    expect((await getBalance(db, userId)).available).toBe(50);
   });
 
   it('failed guest job returns quota, only once', async () => {

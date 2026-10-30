@@ -7,6 +7,7 @@ import type { Core } from '@shipwords/core/server';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { imageSize } from './image-size';
 import {
+  cancelQueued,
   claimGuestJobs,
   loadJob,
   markFailed,
@@ -274,16 +275,15 @@ export function createJobs(core: Core, models: readonly ModelDefinition[]) {
       return json({ jobs: healed.map((row) => publicJob(row, baseURL())) });
     },
 
-    /** POST /api/jobs/<id>/cancel */
+    /** POST /api/jobs/<id>/cancel: only before the job reaches the upstream; after that it keeps going and delivers (409 job_started). */
     async cancel(request: Request, jobId: string): Promise<Response> {
       const job = await ownedJob(request, jobId);
       if (!job) return errorResponse(404, 'job_not_found');
-      const updated = await markFailed(core.db, jobId, 'canceled', 'canceled', 'canceled by user');
+      const updated = await cancelQueued(core.db, jobId);
+      if (updated?.status === 'submitted') return errorResponse(409, 'job_started');
       if (updated?.status === 'canceled') {
-        await env()
-          .GENERATION_WORKFLOW.get(jobId)
-          .then((instance) => instance.terminate())
-          .catch(() => undefined);
+        // The Workflow is not terminated: it may be inside the first submit, the upstream already holding the task. Left running, it sees
+        // the job canceled, cancels the task it just submitted and stops; a Workflow that hasn't started yet stops at its first step.
         // createAdapters throws when the mock is misconfigured; nothing real was submitted then, so there is nothing to cancel.
         const adapter = (() => {
           try {

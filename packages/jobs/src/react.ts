@@ -128,8 +128,14 @@ export function useGeneration(options: { recaptchaSiteKey: string | null }) {
 
   const cancel = useCallback(
     async (jobId: string) => {
-      const { job } = await postJson<{ job: PublicJob | null }>(`/api/jobs/${jobId}/cancel`, {});
-      if (job) upsert(job);
+      try {
+        const { job } = await postJson<{ job: PublicJob | null }>(`/api/jobs/${jobId}/cancel`, {});
+        if (job) upsert(job);
+      } catch (e) {
+        // The upstream got the job between two polls: it keeps going and delivers, and the next poll shows it running.
+        if (e instanceof ApiError && e.code === 'job_started') return;
+        setError(e instanceof ApiError ? e : new ApiError(String(e), undefined, 0, {}));
+      }
     },
     [upsert],
   );

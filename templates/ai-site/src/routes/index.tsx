@@ -336,7 +336,8 @@ function JobCard({ job, email, onCancel }: { job: PublicJob; email?: string; onC
       {job.status === 'failed' && <p className="error">{m.home_job_failed()}</p>}
       {job.status === 'canceled' && <p className="muted">{m.home_job_canceled()}</p>}
       <p className="job-prompt">{job.prompt}</p>
-      {active && (
+      {/* Only before the upstream has it: a running render bills anyway, so the engine refuses to cancel and refund it. */}
+      {job.status === 'queued' && (
         <button type="button" onClick={onCancel}>
           {m.home_job_cancel()}
         </button>

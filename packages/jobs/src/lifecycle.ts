@@ -97,6 +97,27 @@ export async function markFailed(
 }
 
 /**
+ * User cancel: only while nothing has been submitted upstream, then settle the refund. A running upstream task bills whether or not
+ * it is canceled, so refunding then would let a user loop submit → cancel for free renders; such a job keeps going and delivers.
+ * The first submit moves the job out of queued with a conditional update too (markSubmitted), so exactly one of the two wins;
+ * when the cancel wins, the runner cancels the task it just submitted. Returns the job as it is now.
+ */
+export async function cancelQueued(db: Db, jobId: string): Promise<JobRow | null> {
+  await db
+    .update(jobs)
+    .set({
+      status: 'canceled',
+      errorCode: 'canceled',
+      errorMessage: 'canceled by user',
+      finishedAt: Date.now(),
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, 'queued')));
+  const job = await loadJob(db, jobId);
+  if (job) await settleFailure(db, job);
+  return job;
+}
+
+/**
  * Failed and canceled jobs: refund credits (idempotent). Failed guest jobs also return their quota (once); canceled ones don't, because the
  * upstream may already have charged us (a cancel just before the result lands), and returning it would let one guest loop create → cancel forever.
  * Succeeded jobs do nothing.
