@@ -11,7 +11,8 @@ export interface PublicJob {
   prompt: string;
   costCredits: number;
   outputs: { url: string; mediaType: string }[];
-  error: { code: string; message: string | null } | null;
+  /** Failure code only; sites show their own copy for failed jobs. */
+  error: { code: string } | null;
   createdAt: number;
   finishedAt: number | null;
 }

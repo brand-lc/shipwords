@@ -253,6 +253,7 @@ test('new site from a vendored shipwords: site lands in the workspace, scripts p
   const toolsDir = path.relative(target, path.join(TOOLS_ROOT, 'tools')).replaceAll(path.sep, '/');
   assert.ok(pkg.scripts.dev.includes(`node ${toolsDir}/dev-port.mjs`));
   assert.ok(!pkg.scripts.check.includes('../../tools/'));
+  assert.ok(pkg.scripts.deploy.includes(`node ${toolsDir}/check-site.mjs . && wrangler deploy`));
   const drizzle = fs.readFileSync(path.join(target, 'drizzle.config.ts'), 'utf8');
   const packagesDir = path.relative(target, path.join(TOOLS_ROOT, 'packages')).replaceAll(path.sep, '/');
   assert.ok(drizzle.includes(`'${packagesDir}/core/src/db/schema.ts'`));

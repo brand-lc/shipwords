@@ -11,8 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "deploy": "vite build && wrangler deploy",
-    "deploy:preview": "vite build && wrangler versions upload"
+    "deploy": "vite build && node ../../tools/check-site.mjs . && wrangler deploy",
+    "deploy:preview": "vite build && node ../../tools/check-site.mjs . && wrangler versions upload"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7",

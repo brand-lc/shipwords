@@ -51,7 +51,8 @@ export function publicJob(job: JobRow, baseURL: string) {
       url: `${baseURL}/files/${output.key}`,
       mediaType: output.mediaType,
     })),
-    error: job.errorCode ? { code: job.errorCode, message: job.errorMessage } : null,
+    // Code only: the stored message holds internal detail (exceptions, upstream replies, check scores) and stays in the database and logs.
+    error: job.errorCode ? { code: job.errorCode } : null,
     createdAt: job.createdAt,
     finishedAt: job.finishedAt,
   };
