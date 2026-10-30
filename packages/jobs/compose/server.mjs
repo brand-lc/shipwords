@@ -49,6 +49,25 @@ async function durationOf(file) {
   return value;
 }
 
+/** Video frames actually in the file (packets of the first video stream; our MP4s have one frame per packet). */
+async function framesOf(file) {
+  const { stdout } = await run('ffprobe', [
+    '-v',
+    'error',
+    '-select_streams',
+    'v:0',
+    '-count_packets',
+    '-show_entries',
+    'stream=nb_read_packets',
+    '-of',
+    'csv=p=0',
+    file,
+  ]);
+  const value = Number(stdout.trim());
+  if (!(value > 0)) throw new Error(`cannot count frames of ${file}`);
+  return value;
+}
+
 async function save(form, field, file) {
   const value = form.get(field);
   if (!value || typeof value === 'string') throw new Error(`missing file ${field}`);
@@ -163,7 +182,7 @@ async function extract(req) {
     const input = join(dir, 'video.mp4');
     const output = join(dir, 'clip.mp4');
     await save(form, 'video', input);
-    await run('ffmpeg', buildExtractArgs({ ...spec, input, output }));
+    await run('ffmpeg', buildExtractArgs({ ...spec, input, frames: await framesOf(input), output }));
     return await readFile(output);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -188,7 +207,7 @@ async function patch(req) {
     buildPatchArgs({
       ...spec,
       video,
-      frames: Math.round((await durationOf(video)) * spec.fps),
+      frames: await framesOf(video),
       patch: patchFile,
       patchDuration: await durationOf(patchFile),
       output: song,

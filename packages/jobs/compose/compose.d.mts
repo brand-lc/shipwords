@@ -29,8 +29,10 @@ export function cropPixels(
   width: number,
   height: number,
 ): { x: number; y: number; w: number; h: number };
+export function clampRanges(ranges: [number, number][], frames: number): [number, number][];
 export function buildExtractArgs(spec: {
   input: string;
+  frames: number;
   ranges: [number, number][];
   crop?: readonly number[];
   width: number;

@@ -219,6 +219,20 @@ export function cropPixels(box, width, height) {
   };
 }
 
+/**
+ * Ranges cut to a video's actual frame count. Compose ends the video with the soundtrack (-shortest), which can drop the last frame
+ * the shot lengths add up to; extract and patch both cut the same way, so the repaired clip still lines up. Throws if nothing is left.
+ * @param {[number, number][]} ranges
+ * @returns {[number, number][]}
+ */
+export function clampRanges(ranges, frames) {
+  const kept = ranges
+    .filter(([start]) => start < frames)
+    .map(([start, end]) => [start, Math.min(end, frames)]);
+  if (kept.length === 0) throw new Error('ranges start past the video');
+  return kept;
+}
+
 const ENCODE = [
   '-c:v',
   'libx264',
@@ -235,9 +249,11 @@ const ENCODE = [
 /**
  * Repair input: join the frames of each range (one input per range, so nothing is buffered while another range plays), and with crop
  * cut that box out and scale it up to the frame width (replace models work better on a person filling the frame). No audio.
- * @param {{ input: string; ranges: [number, number][]; crop?: number[]; width: number; height: number; output: string }} spec
+ * @param {{ input: string; frames: number; ranges: [number, number][]; crop?: number[]; width: number; height: number; output: string }} spec
+ *   frames: frame count of input; ranges are cut to it (clampRanges).
  */
-export function buildExtractArgs({ input, ranges, crop, width, height, output }) {
+export function buildExtractArgs({ input, frames, ranges: wanted, crop, width, height, output }) {
+  const ranges = clampRanges(wanted, frames);
   const args = ['-hide_banner', '-loglevel', 'error', '-y'];
   for (const _ of ranges) args.push('-i', input);
   const filters = ranges.map(
@@ -270,12 +286,12 @@ function featherAlpha(box, width, height, feather) {
  * clip replaces those frames; a box is overlaid on them with feathered inner edges. Frames outside the ranges and the audio are kept.
  * @param {{ video: string; frames: number; patch: string; patchDuration: number; ranges: [number, number][]; crop?: number[];
  *   width: number; height: number; fps: number; output: string }} spec
- *   frames: frame count of video.
+ *   frames: frame count of video; ranges are cut to it as in buildExtractArgs.
  */
 export function buildPatchArgs(spec) {
-  const { video, frames, patch, patchDuration, ranges, crop, width, height, fps, output } = spec;
+  const { video, frames, patch, patchDuration, crop, width, height, fps, output } = spec;
   if (!(patchDuration > 0)) throw new Error('patch duration must be positive');
-  if (ranges[ranges.length - 1][1] > frames) throw new Error('ranges run past the video');
+  const ranges = clampRanges(spec.ranges, frames);
   const box = crop ? cropPixels(crop, width, height) : { x: 0, y: 0, w: width, h: height };
   const feather = Math.max(2, Math.min(48, Math.floor(Math.min(box.w, box.h) / 4)));
   const length = ranges.reduce((sum, [start, end]) => sum + end - start, 0);

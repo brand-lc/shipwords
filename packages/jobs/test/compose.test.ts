@@ -5,6 +5,7 @@ import {
   buildPatchArgs,
   buildSilentArgs,
   checkRanges,
+  clampRanges,
   cropPixels,
   matchCuts,
   parseCutTimes,
@@ -185,7 +186,14 @@ describe('repair args', () => {
   ];
 
   it('extract: one input per range trimmed by frame, joined, no audio; crop cuts the box in even pixels and scales it to full width', () => {
-    const args = buildExtractArgs({ input: 'in.mp4', ranges, width: 720, height: 1280, output: 'clip.mp4' });
+    const args = buildExtractArgs({
+      input: 'in.mp4',
+      frames: 425,
+      ranges,
+      width: 720,
+      height: 1280,
+      output: 'clip.mp4',
+    });
     const graph = args[args.indexOf('-filter_complex') + 1]!;
     expect(args.filter((arg) => arg === 'in.mp4')).toHaveLength(2);
     expect(graph).toBe(
@@ -195,6 +203,7 @@ describe('repair args', () => {
     expect(args).toContain('-an');
     const cropped = buildExtractArgs({
       input: 'in.mp4',
+      frames: 425,
       ranges,
       crop: [0, 0, 0.444, 0.3875],
       width: 720,
@@ -227,7 +236,34 @@ describe('repair args', () => {
     // The last range ends at the last frame: no empty tail piece.
     expect(graph).toContain('[p1][b2][p3]concat=n=3:v=1:a=0,format=yuv420p[v]');
     expect(args).toEqual(expect.arrayContaining(['-map', '0:a?', '-c:a', 'copy']));
-    expect(() => buildPatchArgs({ ...spec(), frames: 400 })).toThrow(/past the video/);
+  });
+
+  it('ranges are cut to the frames the video has: compose ends with the soundtrack and can drop the last frame', () => {
+    // A composed 17.688 s cut measured 424 frames (shot lengths add up to 425); extract and patch must cut alike.
+    const extract = buildExtractArgs({
+      input: 'in.mp4',
+      frames: 424,
+      ranges,
+      width: 720,
+      height: 1280,
+      output: 'clip.mp4',
+    });
+    expect(extract[extract.indexOf('-filter_complex') + 1]).toContain('trim=start_frame=360:end_frame=424');
+    const patched = buildPatchArgs({ ...spec(), frames: 424 });
+    const graph = patched[patched.indexOf('-filter_complex') + 1]!;
+    // 192 frames now, so the retime and the last patch piece follow.
+    expect(graph).toContain('setpts=0.975610*(PTS-STARTPTS)');
+    expect(graph).toContain('trim=start_frame=128:end_frame=192');
+    expect(
+      clampRanges(
+        [
+          [0, 10],
+          [500, 600],
+        ],
+        425,
+      ),
+    ).toEqual([[0, 10]]);
+    expect(() => clampRanges([[500, 600]], 425)).toThrow(/past the video/);
   });
 
   it('patch with a box: overlaid on the kept frames, feathered only on edges inside the frame', () => {
