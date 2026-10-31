@@ -24,7 +24,7 @@ shipwords 是一套免费、MIT 开源的新词站群框架，用来在 Cloudfla
 **内置成熟的 AI 能力。** [tinydeskai.io](https://tinydeskai.io/) 就是用 shipwords 做的，完整源码在 [`sites/tinydeskai-example`](sites/tinydeskai-example)，可以 fork 来做你自己的词。
 
 - **视频模板**：把一条爆款视频做成模板，访客上传照片，就能拿到同款视频。Tiny Desk AI 就是这样做的。
-- **成熟的换脸**：整段视频一次换完。每张上传的照片替换一位表演者，脸、发型和衣服都换上，口型仍然跟着节拍。原来的脸还在的话，任务判为失败，积分退回。
+- **成熟的换脸**：整段视频一次换完。每张上传的照片替换一位表演者，脸、发型和衣服都换上，口型仍然跟着节拍。有人没换上的话，会先自动补换那几个镜头再交付。
 - **主流模型，内置可用**：GPT Image、Nano Banana、Seedream、FLUX、Seedance、Veo、Kling、Wan 等，填一个 Yir API key 就能用，按次付费。
 
 **开箱就能收钱。** 每个站都自带：
