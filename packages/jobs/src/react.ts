@@ -38,8 +38,8 @@ const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
 const UPLOAD_MAX_SIDE = 2560;
 const HEIC = /\.hei[cf]$/i;
 
-/** For file inputs: HEIC is listed so desktop pickers don't hide iPhone photos; uploadReference converts it where the browser can decode it. */
-export const UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif';
+/** For file inputs: any image, plus HEIC by extension so desktop pickers don't hide iPhone photos; uploadReference converts what the browser can decode. */
+export const UPLOAD_ACCEPT = 'image/*,.heic,.heif';
 
 /** For drag and drop: whether a dropped file is worth trying (Windows often reports HEIC with an empty type). */
 export function acceptsUpload(file: File): boolean {
