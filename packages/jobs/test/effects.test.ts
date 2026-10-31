@@ -3,7 +3,14 @@ import { getBalance, grantCredits, spendCredits } from '@shipwords/core/credits/
 import { createDb } from '@shipwords/core/db/client';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComposeInput, Composer, ExtractInput, FacesInput, PatchInput } from '../src/compose';
+import type {
+  ComposeInput,
+  Composer,
+  ExtractInput,
+  FacesInput,
+  LikenessInput,
+  PatchInput,
+} from '../src/compose';
 import { appendUpstreamJob, loadJob, markFailed, spendKey } from '../src/lifecycle';
 import { defineModels, type EffectSegment, effectParts, type ModelDefinition } from '../src/models';
 import { PREP_HEDGE_MS, runGeneration, type StepRunner } from '../src/runner';
@@ -466,6 +473,15 @@ describe('effect compose', () => {
       this.checks.push(input);
       if (this.checkError) throw this.checkError;
       return this.scores.shift() ?? input.points.map(() => 0.3);
+    }
+    likenessChecks: LikenessInput[] = [];
+    /** Per-person likeness returned by each likeness check in turn; returns "looks like them" once exhausted. */
+    likenessScores: (number | null)[][] = [];
+    likenessError: Error | null = null;
+    async likeness(input: LikenessInput) {
+      this.likenessChecks.push(input);
+      if (this.likenessError) throw this.likenessError;
+      return this.likenessScores.shift() ?? input.people.map(() => 0.9);
     }
     extracts: ExtractInput[] = [];
     patches: PatchInput[] = [];
@@ -1407,6 +1423,157 @@ describe('effect compose', () => {
         expect((await getBalance(db, userId)).available).toBe(40);
       });
 
+      describe('likeness: a swapped person who does not look like their photo is repaired, never refunded', () => {
+        const likenessModels = defineModels([
+          {
+            ...repairModel,
+            effect: {
+              ...repairModel.effect!,
+              segments: [{ ...band, repair: { ...repair, onMiss: 'deliver', likeness: { solo: 0.5 } } }],
+            },
+          },
+        ]);
+        const likenessDeps = (adapter: FakeAdapter, composer: FakeComposer) => ({
+          ...repairDeps(adapter, composer),
+          models: likenessModels,
+        });
+
+        it('the close-up is unlike its photo: one pass on its shot with its photo, delivered once it looks like them', async () => {
+          const { userId, jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          composer.likenessScores = [[0.4], [0.7]];
+          await runGeneration(likenessDeps(adapter, composer), jobId, durableSteps());
+          // Scored on the composed video over solo's shot, the photo read from the bucket rather than over HTTP.
+          expect(composer.likenessChecks).toEqual([
+            {
+              jobId,
+              key: `jobs/${jobId}/1.mp4`,
+              people: [{ photo: { key: 'uploads/up_s.png' }, ranges: [[2, 4]] }],
+            },
+            expect.objectContaining({ key: `jobs/${jobId}/repair-band-0-song.mp4` }),
+          ]);
+          expect(adapter.submits).toHaveLength(2);
+          expect(adapter.submits[1]!.input).toMatchObject({
+            prompt: 'replace solo',
+            references: [
+              { url: `https://site/files/jobs/${jobId}/repair-band-0.mp4`, role: 'reference_video' },
+              { url: 'https://site/files/uploads/up_s.png', role: 'reference_image' },
+            ],
+          });
+          expect(composer.extracts.map((e) => e.ranges)).toEqual([[[48, 96]]]);
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+          expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([10]));
+          expect((await getBalance(db, userId)).available).toBe(40);
+        });
+
+        it('still unlike after every pass: the render is delivered as composed, credits kept, never refunded', async () => {
+          const { userId, jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          composer.likenessScores = [0, 1, 2, 3].map(() => [0.4]);
+          await runGeneration(likenessDeps(adapter, composer), jobId, durableSteps());
+          expect(adapter.submits).toHaveLength(4);
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', errorCode: null });
+          // No pass did better than the render (a tie keeps the earlier version), so the composed video stays.
+          expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+          expect((await getBalance(db, userId)).available).toBe(40);
+        });
+
+        it('a pass that fixes the face but brings an original back: the version with fewer misses wins', async () => {
+          const { jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          // Render: everyone swapped, solo unlike. Pass 0: solo fixed but edge back. Passes 1–2: edge fixed, solo unlike again.
+          composer.scores = [
+            [0.3, 0.2, 0.2],
+            [0.3, 0.8, 0.2],
+            [0.3, 0.2, 0.2],
+            [0.3, 0.2, 0.2],
+          ];
+          composer.likenessScores = [[0.4], [0.7], [0.4], [0.4]];
+          await runGeneration(likenessDeps(adapter, composer), jobId, durableSteps());
+          expect(adapter.submits).toHaveLength(4);
+          // Pass 0 went after solo; pass 1, with edge missed again, after edge first.
+          expect(adapter.submits[1]!.input.prompt).toBe('replace solo');
+          expect(adapter.submits[2]!.input.prompt).toBe('replace front edge');
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+          expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+        });
+
+        it('the likeness check errors or finds no face in the photo: delivered as composed, no pass', async () => {
+          for (const setup of [
+            (composer: FakeComposer) => {
+              composer.likenessError = new Error('container down');
+            },
+            (composer: FakeComposer) => {
+              composer.likenessScores = [[null]];
+            },
+          ]) {
+            const { userId, jobId, adapter } = await repairJob();
+            const composer = new FakeComposer();
+            setup(composer);
+            const log = vi.fn();
+            await runGeneration({ ...likenessDeps(adapter, composer), log }, jobId, durableSteps());
+            expect(adapter.submits).toHaveLength(1);
+            expect(composer.likenessChecks).toHaveLength(1);
+            expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+            expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+            expect((await getBalance(db, userId)).available).toBe(40);
+          }
+        });
+
+        it('solo left as the original: not scored, no pass', async () => {
+          const { jobId } = await repairJob();
+          // Keep front and edge filled, leave solo unfilled.
+          const parts = effectParts(
+            repairModel,
+            { front: slotPhotos.front, edge: slotPhotos.edge },
+            upload,
+            asset,
+          )!;
+          await db
+            .update(jobs)
+            .set({ inputJson: JSON.stringify({ parts }) })
+            .where(eq(jobs.id, jobId));
+          const adapter = new FakeAdapter();
+          adapter.polls.set(`up_${jobId}`, [succeeded('band')]);
+          const composer = new FakeComposer();
+          composer.likenessScores = [[0.1]];
+          await runGeneration(likenessDeps(adapter, composer), jobId, durableSteps());
+          expect(composer.likenessChecks).toHaveLength(0);
+          expect(adapter.submits).toHaveLength(1);
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        });
+
+        it('a job whose cached load predates likeness never checks it on replay, so its cached passes keep their plan', async () => {
+          const { jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          composer.likenessScores = [[0.1]];
+          const inner = durableSteps();
+          // The load step as an older version cached it: the checks carry no likeness flag.
+          const older: StepRunner = {
+            async do(name, fn) {
+              if (name !== 'load') return inner.do(name, fn);
+              const setup = (await fn()) as { checks: Record<string, { likeness?: boolean }> };
+              for (const check of Object.values(setup.checks)) delete check.likeness;
+              return setup as never;
+            },
+            sleep: inner.sleep,
+          };
+          await runGeneration(likenessDeps(adapter, composer), jobId, older);
+          expect(composer.likenessChecks).toHaveLength(0);
+          expect(adapter.submits).toHaveLength(1);
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        });
+
+        it('sites without likeness: a fully swapped render runs no likeness check', async () => {
+          const { jobId, adapter } = await repairJob();
+          const composer = new FakeComposer();
+          await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+          expect(composer.likenessChecks).toHaveLength(0);
+          expect(adapter.submits).toHaveLength(1);
+          expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded' });
+        });
+      });
+
       it('a cancel during the passes still refunds: delivery only replaces the miss refund', async () => {
         const { userId, jobId, adapter } = await repairJob();
         adapter.polls.set(`up_${jobId}:band:repair:0`, []);
@@ -1474,6 +1641,11 @@ describe('effect compose', () => {
         /edge must be in some shot/,
       );
       expect(withRepair({ repair: { ...repair, crops: { edge: [0.8, 0, 0.4, 0.4] } } })).toThrow(/crops/);
+      const deliver = { ...repair, onMiss: 'deliver' as const };
+      expect(withRepair({ repair: { ...deliver, likeness: { solo: 0.5 } } })).not.toThrow();
+      expect(withRepair({ repair: { ...repair, likeness: { solo: 0.5 } } })).toThrow(/onMiss 'deliver'/);
+      expect(withRepair({ repair: { ...deliver, likeness: { solo: 1.2 } } })).toThrow(/likeness/);
+      expect(withRepair({ repair: { ...deliver, likeness: { nobody: 0.5 } } })).toThrow(/likeness/);
     });
   });
 });

@@ -5,10 +5,17 @@ For each point (a face center in the original as fractions of width and height, 
 when t is omitted) prints, as a JSON list in the same order,
 the highest cosine similarity between that original face and any face in 16 frames spread over the first `seconds` of the output.
 A missed swap scores 0.85+, a swapped person stays under 0.4. A point with no face in the original prints 0.
+
+Likeness: python3 faces.py likeness <output.mp4> '<[{"photo": path, "ranges": [[start, end], ...]}, ...]>'
+For each person prints how much the output looks like their photo: in frames sampled over their ranges (seconds), the best match to the
+photo's face per frame, then the median, so a few good frames don't hide a drifted face. null when the photo has no face or no frame was read.
+The same person scores about 0.45–0.7 in a close-up; a different face stays under 0.36.
+
 Models: OpenCV Zoo YuNet (detection) and SFace (recognition), baked into the image under /app/models.
 """
 import json
 import os
+import statistics
 import sys
 
 import cv2
@@ -60,7 +67,45 @@ def original_frame(path, seconds):
     return image
 
 
+def likeness(output, people):
+    capture = cv2.VideoCapture(output)
+    fps = capture.get(cv2.CAP_PROP_FPS) or 24
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    found = {}
+
+    def faces_at(index):
+        if index not in found:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, image = capture.read()
+            found[index] = [face[2] for face in faces(image)] if ok else None
+        return found[index]
+
+    scores = []
+    for person in people:
+        image = cv2.imread(person['photo'])
+        # A prep photo shows one person filling the frame: its first face is them.
+        in_photo = faces(image) if image is not None else []
+        target = in_photo[0][2] if in_photo else None
+        indices = []
+        for start, end in person['ranges']:
+            first, last = int(start * fps), min(int(end * fps), total)
+            # 2 frames per second, at least 8 per person, skipping the frames right at a cut.
+            count = max(8 // len(person['ranges']), round((end - start) * SAMPLES_PER_SECOND))
+            indices += [first + int((last - first) * (i + 0.5) / count) for i in range(count)] if last > first else []
+        best = []
+        for index in indices:
+            seen = faces_at(index)
+            if seen is None or target is None:
+                continue
+            best.append(max((recognizer.match(target, feature, cv2.FaceRecognizerSF_FR_COSINE) for feature in seen), default=0.0))
+        scores.append(round(max(0.0, float(statistics.median(best))), 3) if best else None)
+    return scores
+
+
 def main():
+    if sys.argv[1] == 'likeness':
+        print(json.dumps(likeness(sys.argv[2], json.loads(sys.argv[3]))))
+        return
     output, original, seconds, points = sys.argv[1], sys.argv[2], float(sys.argv[3]), json.loads(sys.argv[4])
     by_time = {}
     targets = []

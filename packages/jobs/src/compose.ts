@@ -36,6 +36,14 @@ export interface FacesInput {
   seconds: number;
 }
 
+export interface LikenessInput {
+  jobId: string;
+  /** Composed video (R2 key). */
+  key: string;
+  /** One per person: their photo (an R2 key, or a URL such as an upstream prep result) and the seconds [start, end) they appear in. */
+  people: { photo: { key: string } | { url: string }; ranges: [number, number][] }[];
+}
+
 export interface ExtractInput {
   jobId: string;
   /** Composed video (R2 key). */
@@ -64,6 +72,11 @@ export interface Composer {
    * High means the original person is still in the output (not swapped). Same order as points. Read-only, repeatable.
    */
   faces(input: FacesInput): Promise<number[]>;
+  /**
+   * Likeness check: per person, the median over sampled frames of their ranges of the best face similarity (cosine, 0–1) to their photo;
+   * null when the photo shows no face (an animal, say) or no frame was read. Same order as people. Read-only, repeatable.
+   */
+  likeness(input: LikenessInput): Promise<(number | null)[]>;
   /** Repair input: the frames of the given ranges joined into one silent clip (or a box of them). Read-only, repeatable. */
   extract(input: ExtractInput): Promise<ArrayBuffer>;
   /**
@@ -132,6 +145,31 @@ export function containerComposer(namespace: DurableObjectNamespace, bucket: R2B
       )
         throw new Error('faces returned no scores');
       return similarity as number[];
+    },
+    async likeness(input) {
+      const form = new FormData();
+      form.set('people', JSON.stringify(input.people.map(({ ranges }) => ({ ranges }))));
+      form.set('video', await blobOf(bucket, input.key), 'video.mp4');
+      for (const [i, { photo }] of input.people.entries()) {
+        if ('key' in photo) {
+          form.set(`photo-${i}`, await blobOf(bucket, photo.key), 'photo');
+          continue;
+        }
+        const response = await fetch(photo.url);
+        if (!response.ok) throw new Error(`likeness photo ${i} failed: ${response.status}`);
+        form.set(`photo-${i}`, await response.blob(), 'photo');
+      }
+      const stub = namespace.get(namespace.idFromName(input.jobId));
+      const response = await stub.fetch('http://compose/likeness', { method: 'POST', body: form });
+      if (!response.ok) throw new Error(`likeness failed: ${response.status} ${await response.text()}`);
+      const { similarity } = (await response.json()) as { similarity?: unknown };
+      if (
+        !Array.isArray(similarity) ||
+        similarity.length !== input.people.length ||
+        !similarity.every((value) => value === null || typeof value === 'number')
+      )
+        throw new Error('likeness returned no scores');
+      return similarity as (number | null)[];
     },
     async extract(input) {
       const form = new FormData();

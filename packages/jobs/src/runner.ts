@@ -172,6 +172,11 @@ interface SegmentCheck {
   seconds: number;
   /** The segment has repair passes; missing on loads cached by older versions, whose missed swaps are refunded as before. */
   repair?: boolean;
+  /**
+   * The segment has a likeness check (repair.likeness); missing on loads cached by older versions. A job already in its repair passes
+   * when likeness shipped must not start checking it on replay: a new miss would change which pass its cached steps belong to.
+   */
+  likeness?: boolean;
 }
 
 interface JobInput {
@@ -269,6 +274,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
               original: segment.check!.original,
               faces: segment.check!.faces,
               ...(segment.repair ? { repair: true } : {}),
+              ...(segment.repair?.likeness ? { likeness: true } : {}),
               // trim segments only put the first target seconds into the output, not rounded: comparing more would include the next shot that gets cut, less would miss the last frames.
               // stretch segments use the whole clip, so compare over the model duration.
               seconds:
@@ -503,8 +509,59 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
   };
 
   /**
-   * Repair passes after compose for a segment whose check found original people (segment.repair, the only segment, so the composed video
-   * shares the original clip's timeline). Each pass cuts the shots of one missed slot out of the composed video, has the replace model
+   * Filled slots of a composed video that don't look enough like their photos (repair.likeness), each scored over the shots it is in.
+   * Soft by design: a check error or a photo with no face counts as no miss, so this only ever adds repair passes, never fails or refunds.
+   */
+  const unlike = async (stepName: string, partId: string, index: number, key: string): Promise<string[]> => {
+    const effect = deps.models.find((m) => m.id === setup.model)?.effect;
+    const segment = effect?.segments.find((candidate) => candidate.id === partId);
+    const repair = segment?.repair;
+    const fps = effect?.compose?.fps;
+    if (
+      !setup.checks?.[partId]?.likeness ||
+      !repair?.likeness ||
+      repair.onMiss !== 'deliver' ||
+      !segment?.cuts ||
+      !fps ||
+      !deps.composer
+    )
+      return [];
+    const { likeness, shots } = repair;
+    const { cuts, target } = segment;
+    return step
+      .do(stepName, async () => {
+        const row = await loadJob(deps.db, jobId);
+        if (!row || TERMINAL.includes(row.status)) return [];
+        const model = deps.models.find((m) => m.id === row.modelId)!;
+        const filled = partsOf(row, model)[index]!.slots ?? [];
+        const photos = submitInput(row, index).references.filter((ref) => ref.role === 'reference_image');
+        const slots = filled.filter((slot) => likeness[slot] !== undefined);
+        if (slots.length === 0) return [];
+        // Site uploads (the photo itself when prep fell back to it) are read from the bucket, not over HTTP from the site.
+        const files = deps.fileUrl?.('') ?? null;
+        const people = slots.map((slot) => {
+          const url = photos[filled.indexOf(slot)]!.url;
+          const ofSlot = shots.flatMap((inShot, i) => (inShot.includes(slot) ? [i] : []));
+          return {
+            photo: files && url.startsWith(files) ? { key: url.slice(files.length) } : { url },
+            ranges: shotFrames(cuts, target!, fps, ofSlot).map(
+              ([start, end]) => [start / fps, end / fps] as [number, number],
+            ),
+          };
+        });
+        const scores = await deps.composer!.likeness({ jobId, key, people });
+        deps.log?.('likeness checked', { jobId, part: partId, key, slots, scores });
+        return slots.filter((slot, i) => scores[i] != null && scores[i]! < likeness[slot]!);
+      })
+      .catch((error: unknown) => {
+        deps.log?.('likeness check errored', { jobId, part: partId, key, error: String(error) });
+        return [];
+      });
+  };
+
+  /**
+   * Repair passes after compose for a segment whose check found original people, or whose people don't look enough like their photos
+   * (segment.repair, the only segment, so the composed video shares the original clip's timeline). Each pass cuts the shots of one missed slot out of the composed video, has the replace model
    * re-render them with the photos, puts them back and checks every filled slot again; nextRepairPass picks whole frame or one person's box.
    * The upstream tasks are recorded after the segments, so cancel, abort and cost cover them. When the passes run out, the model rejects
    * or fails a pass, or nothing is left that a pass can cover, the job fails swap_not_applied with a refund; under repair.onMiss
@@ -530,6 +587,8 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const repair = segment?.repair;
     const compose = effect?.compose;
     if (!segment?.cuts || !repair || !compose || !check.original || !check.faces) {
+      // Nothing missed the swap: deliver as composed, a likeness miss alone is never refunded.
+      if (initial.length === 0) return composed;
       await notApplied('repair is no longer configured')();
       return null;
     }
@@ -539,6 +598,9 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const passes: RepairPass[] = [];
     let current = composed[0]!.key;
     let silent = composed[1]!.key;
+    const off = await unlike(`likeness:${partId}`, partId, index, current);
+    missed = [...initial, ...off.filter((slot) => !initial.includes(slot))];
+    if (missed.length === 0) return composed;
     /** Copy a version over the compose keys (the delivered outputs). */
     const deliver = (stepName: string, song: string, quiet: string) =>
       step.do(stepName, async () => {
@@ -556,7 +618,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
         return true;
       });
     // The checked version with the fewest missed people so far; a tie keeps the earlier one.
-    let best = { song: current, silent, missed: initial.length };
+    let best = { song: current, silent, missed: missed.length };
     /**
      * The passes can't finish the swap. By default the job fails (`failure`, with a refund); under onMiss 'deliver' the paid render
      * has been charged, so the best checked version is delivered and the credits are kept.
@@ -701,7 +763,12 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
             ),
           );
         deps.log?.('repair pass checked', { jobId, part: partId, round, pass, scores });
-        missed = slots.filter((_, i) => scores[i]! >= check.maxSimilarity);
+        const unlikeNow = await unlike(`${label}:likeness`, partId, index, current);
+        missed = job.slots.filter(
+          (slot) =>
+            (slots.includes(slot) && scores[slots.indexOf(slot)]! >= check.maxSimilarity) ||
+            unlikeNow.includes(slot),
+        );
         if (missed.length < best.missed) best = { song: current, silent, missed: missed.length };
         if (missed.length > 0) continue;
         return (await deliver(`${label}:deliver`, current, silent)) ? composed : null;
@@ -853,8 +920,12 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     const composed = await step.do('compose', () => composeOutputs(deps, jobId, partKeys, outputs.length));
     if (!composed) return;
     finalOutputs = composed;
-    for (const [partId, [index, slots]] of toRepair) {
-      const repaired = await repairOutputs(partId, index, setup.checks![partId]!, slots, composed);
+    for (const [index, partId] of partIds.entries()) {
+      const check = setup.checks?.[partId];
+      const missed = toRepair.get(partId)?.[1];
+      // A segment with nothing missed still goes through when it has repair passes: its likeness check may ask for some.
+      if (!check || (!missed && !(check.repair && deps.composer && deps.fileUrl))) continue;
+      const repaired = await repairOutputs(partId, index, check, missed ?? [], composed);
       if (!repaired) return;
     }
   }

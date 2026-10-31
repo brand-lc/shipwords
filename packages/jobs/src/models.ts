@@ -116,6 +116,13 @@ export interface EffectRepair {
    * after a whole-frame pass has missed them, the next pass repairs that box alone and blends it back.
    */
   crops?: Readonly<Record<string, CropBox>>;
+  /**
+   * Slot → lowest likeness (cosine, 0–1) between the person's photo and their face in the shots they are in, checked on the composed
+   * video. A filled slot below it is repaired like a missed swap and counts as missed when picking the best version. Needs onMiss
+   * 'deliver': a person who doesn't look enough like their photo is never a reason to refund. For close-ups only: small or profile
+   * faces score low even when right.
+   */
+  likeness?: Readonly<Record<string, number>>;
 }
 
 export interface EffectCheck {
@@ -422,6 +429,14 @@ function validateRepair(modelId: string, effect: EffectSpec, segment: EffectSegm
       !(x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= 1 && y + height <= 1)
     )
       throw new Error(`${where}.crops must map this segment's slots to boxes inside the frame`);
+  }
+  for (const [slot, min] of Object.entries(repair.likeness ?? {})) {
+    if (repair.onMiss !== 'deliver') throw new Error(`${where}.likeness needs onMiss 'deliver'`);
+    const seen = new Set(shots.filter((slots) => slots.includes(slot)).flat());
+    if (seen.size === 0 || seen.size > 3 || !(min > 0 && min < 1))
+      throw new Error(
+        `${where}.likeness must map slots in some shot, with at most 3 people across their shots, to a similarity between 0 and 1`,
+      );
   }
 }
 

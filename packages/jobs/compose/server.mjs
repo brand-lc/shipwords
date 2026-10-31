@@ -5,6 +5,8 @@
 // GET  /files/<id>/song.mp4 | /files/<id>/silent.mp4  read results.
 // POST /faces  multipart: video (model output), original (unmasked clip of the shot), seconds, points (JSON [[x, y], ...]).
 //   Returns { similarity: [...] }: per point, how closely any face in the output matches the original person there (faces.py). Read-only.
+// POST /likeness  multipart: video (composed), people (JSON [{ ranges: [[start, end], ...] seconds }, ...]), photo-0…photo-N.
+//   Returns { similarity: [...] }: per person, how much their face in those ranges looks like their photo, or null (faces.py). Read-only.
 // POST /extract  multipart: manifest (JSON: { ranges: [[start, end), ...] frames, crop?: [x, y, w, h], width, height, fps }), video.
 //   Returns those frames joined into one silent MP4 (the box only, scaled up, with crop): the input of a repair pass. Read-only.
 // POST /patch  multipart: manifest (as extract plus id), video, patch (the repaired clip). Returns video with the repaired frames
@@ -157,6 +159,44 @@ async function faces(req) {
   }
 }
 
+async function likeness(req) {
+  const form = await formOf(req);
+  const people = JSON.parse(String(form.get('people') ?? ''));
+  const valid = (range) =>
+    Array.isArray(range) &&
+    range.length === 2 &&
+    range.every((value) => Number.isFinite(value) && value >= 0 && value <= 60) &&
+    range[0] < range[1];
+  if (
+    !Array.isArray(people) ||
+    people.length === 0 ||
+    people.length > 10 ||
+    !people.every(
+      (person) => Array.isArray(person?.ranges) && person.ranges.length > 0 && person.ranges.every(valid),
+    )
+  )
+    throw new Error('bad people');
+  const dir = join('/tmp/faces', randomUUID());
+  await mkdir(dir, { recursive: true });
+  try {
+    const video = join(dir, 'video.mp4');
+    await save(form, 'video', video);
+    const args = [];
+    for (const [i, person] of people.entries()) {
+      const photo = join(dir, `photo-${i}`);
+      await save(form, `photo-${i}`, photo);
+      args.push({ photo, ranges: person.ranges });
+    }
+    const { stdout } = await run('python3', ['faces.py', 'likeness', video, JSON.stringify(args)]);
+    const similarity = JSON.parse(stdout);
+    if (!Array.isArray(similarity) || similarity.length !== people.length)
+      throw new Error('bad likeness output');
+    return similarity;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function formOf(req) {
   return new Request('http://local/', {
     method: 'POST',
@@ -238,6 +278,10 @@ createServer(async (req, res) => {
     }
     if (req.method === 'POST' && req.url === '/faces') {
       const body = JSON.stringify({ similarity: await faces(req) });
+      return res.writeHead(200, { 'content-type': 'application/json' }).end(body);
+    }
+    if (req.method === 'POST' && req.url === '/likeness') {
+      const body = JSON.stringify({ similarity: await likeness(req) });
       return res.writeHead(200, { 'content-type': 'application/json' }).end(body);
     }
     const match = req.method === 'GET' && req.url?.match(/^\/files\/([a-z0-9_-]{1,80})\/(song|silent)\.mp4$/);
