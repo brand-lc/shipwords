@@ -297,3 +297,7 @@ createServer(async (req, res) => {
     res.writeHead(500, { 'content-type': 'text/plain' }).end(String(error?.message ?? error));
   }
 }).listen(8080);
+
+// Node runs as PID 1 here, and PID 1 ignores SIGTERM unless it has a handler: without this, the stop signal sent after
+// sleepAfter does nothing and the instance keeps billing memory for hours. Stop only comes with no request in flight.
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));
