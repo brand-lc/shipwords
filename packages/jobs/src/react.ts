@@ -32,11 +32,35 @@ export interface GenerateInput {
 const isActive = (job: PublicJob) => job.status === 'queued' || job.status === 'submitted';
 const POLL_MS = 2500;
 
+// The server takes PNG, JPEG and WebP up to 10 MB; phone screenshots and HEIC photos often aren't, so they're re-encoded here first.
+const UPLOAD_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
+const UPLOAD_MAX_SIDE = 2560;
+
+async function fitForUpload(file: File): Promise<Blob> {
+  if (file.size <= UPLOAD_MAX_BYTES && UPLOAD_TYPES.has(file.type)) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, UPLOAD_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    return blob ?? file;
+  } catch {
+    // The browser can't decode it: send it as is and let the server say why.
+    return file;
+  }
+}
+
 export async function uploadReference(file: File): Promise<string> {
+  const body = await fitForUpload(file);
   const response = await fetch('/api/uploads', {
     method: 'POST',
-    headers: { 'content-type': file.type },
-    body: file,
+    headers: { 'content-type': body.type },
+    body,
   });
   const data = (await response.json()) as { path?: string; error?: { code: string; message: string } };
   if (!response.ok || !data.path) {
