@@ -1400,6 +1400,29 @@ describe('effect compose', () => {
         expect((await getBalance(db, userId)).available).toBe(40);
       });
 
+      it('the check of the render itself errors: the charged render is delivered unchecked, credits kept, no pass', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        const composer = new FakeComposer();
+        composer.checkError = new Error('container cold');
+        await runGeneration(deliverDeps(adapter, composer), jobId, durableSteps());
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', errorCode: null });
+        expect(composer.calls).toHaveLength(1);
+        expect(adapter.submits).toHaveLength(1);
+        expect(await bytesOf(`jobs/${jobId}/1.mp4`)).toEqual(new Uint8Array([1]));
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
+      it('a miss that cannot be repaired (no public file URL): the charged render is delivered as is, credits kept', async () => {
+        const { userId, jobId, adapter } = await repairJob();
+        const composer = new FakeComposer();
+        composer.scores = [[0.3, 0.8, 0.2]];
+        const { fileUrl: _, ...noUrl } = deliverDeps(adapter, composer);
+        await runGeneration(noUrl, jobId, durableSteps());
+        expect(await loadJob(db, jobId)).toMatchObject({ status: 'succeeded', errorCode: null });
+        expect(adapter.submits).toHaveLength(1);
+        expect((await getBalance(db, userId)).available).toBe(40);
+      });
+
       it('replay after an interruption while delivering: no pass runs twice, the job finishes once', async () => {
         const { userId, jobId, adapter } = await repairJob();
         const composer = new FakeComposer();

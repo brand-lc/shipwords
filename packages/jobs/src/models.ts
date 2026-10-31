@@ -106,7 +106,8 @@ export interface EffectRepair {
   /**
    * When the passes can't replace everyone (they run out, the model rejects or fails one, or no pass covers a missed slot):
    * 'refund' (default) fails the job swap_not_applied with a refund; 'deliver' delivers the version with the fewest missed people
-   * and keeps the credits, for sites that stop refunding once the paid render has been charged.
+   * and keeps the credits, for sites that stop refunding once the paid render has been charged. Under 'deliver' a check error on the render
+   * or a miss that can't be repaired at all also delivers the render instead of refunding.
    */
   onMiss?: 'refund' | 'deliver';
   /** Slots visible in each shot, one entry per shot (cuts split the segment into cuts.length + 1 shots); a pass on a slot covers every shot it is in. */

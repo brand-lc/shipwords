@@ -463,7 +463,8 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
    * No rerun of the segment itself: a video render costs dollars, a repair pass cents.
    * Only slots the user filled are checked: the others keep the original on purpose.
    * Errors in the check itself (container failure, unreadable output) fail the job with a refund: an unchecked video may be the original clip,
-   * and refunding one good video costs less than charging for a broken one. Returns false if the job has ended.
+   * and refunding one good video costs less than charging for a broken one. Under repair.onMiss 'deliver' the render has been charged, so a
+   * check error delivers it unchecked and a miss that can't be repaired delivers it as is, neither refunds. Returns false if the job has ended.
    */
   const verify = async (partId: string, index: number, check: SegmentCheck): Promise<boolean | string[]> => {
     const { original, faces } = check;
@@ -494,7 +495,13 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
           return { errored: String(error) };
         });
     if ('stopped' in verdict) return false;
+    // Read from the current config like repairOutputs; a cached load without repair keeps refunding as before.
+    const deliverOnMiss =
+      check.repair &&
+      deps.models.find((m) => m.id === setup.model)?.effect?.segments.find((s) => s.id === partId)?.repair
+        ?.onMiss === 'deliver';
     if ('errored' in verdict) {
+      if (deliverOnMiss) return true;
       await fail('check_failed', `${partId} output could not be checked: ${verdict.errored}`.slice(0, 500));
       return false;
     }
@@ -504,6 +511,7 @@ async function runSteps(deps: RunnerDeps, jobId: string, step: StepRunner): Prom
     // Checks cached by older versions don't name their slots; repair needs compose, the container and a public URL for the frames.
     if (check.repair && verdict.slots && setup.compose && deps.composer && deps.fileUrl)
       return verdict.slots.filter((_, i) => verdict.scores[i]! >= check.maxSimilarity);
+    if (deliverOnMiss) return true;
     await fail('swap_not_applied', `${partId} still shows an original face (similarity ${worst})`);
     return false;
   };
