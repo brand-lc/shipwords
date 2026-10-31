@@ -24,7 +24,7 @@ shipwords is a free, MIT-licensed framework for running a fleet of new-keyword A
 **Proven AI, built in.** [tinydeskai.io](https://tinydeskai.io/) is built on shipwords, and its full source is in [`sites/tinydeskai-example`](sites/tinydeskai-example), ready to fork.
 
 - **Video templates**: turn a viral clip into a template; visitors upload photos and get the same video back. That's how Tiny Desk AI works.
-- **Face swap that holds up**: the whole clip in one pass. Each uploaded photo replaces a performer, face, hair and clothes, with mouths still on the beat. If someone wasn't swapped, those shots are re-rendered automatically before the video is delivered.
+- **Face swap that holds up**: the whole clip in one pass. Each uploaded photo replaces a performer, face, hair and clothes, with mouths still on the beat. Missed swaps can be re-rendered shot by shot before delivery, as tinydeskai.io does.
 - **The popular models, built in**: GPT Image, Nano Banana, Seedream, FLUX, Seedance, Veo, Kling, Wan and more, behind one Yir API key, paid per generation.
 
 **Takes money out of the box.** Every site comes with:
