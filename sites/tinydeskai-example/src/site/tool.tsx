@@ -1,4 +1,11 @@
-import { type PublicJob, uploadReference, type useGeneration } from '@shipwords/jobs/react';
+import { ApiError } from '@shipwords/core/react/account';
+import {
+  acceptsUpload,
+  type PublicJob,
+  UPLOAD_ACCEPT,
+  uploadReference,
+  type useGeneration,
+} from '@shipwords/jobs/react';
 import { getRouteApi } from '@tanstack/react-router';
 import {
   type DragEvent,
@@ -14,8 +21,7 @@ import { identify, track } from '~/lib/track';
 import { m } from '~/paraglide/messages.js';
 import { openAccount } from '~/site/account';
 import { PhoneHandoff } from '~/site/phone-upload';
-import { photoTooSmall } from '~/site/photo-check';
-import { formatPrice, PricingLink } from '~/site/pricing';
+import { formatPrice, openPricing, PricingLink } from '~/site/pricing';
 import { openSignIn } from '~/site/sign-in';
 import site from '../../site.config';
 import models from '../../site.models';
@@ -82,7 +88,6 @@ const FILL_ORDER = ['lead', 'sax', 'keys', 'backLeft', 'backRight'];
 // Drag to move: it is a drag only after the pointer moves DRAG_START px, otherwise a click to pick a photo; it drops on a slot only within DROP_REACH radii of its center.
 const DRAG_START = 6;
 const DROP_REACH = 1.6;
-const ACCEPT = ['image/png', 'image/jpeg', 'image/webp'];
 
 const root = getRouteApi('__root__');
 
@@ -182,8 +187,11 @@ export function TinyDeskTool({
     }
   }, [jobs]);
 
+  // Out of credits opens the pricing dialog right away: with only a line of text, some people clicked generate seven or eight times before buying.
   useEffect(() => {
-    if (error) track('generate_failed', { code: error.code ?? 'unknown' });
+    if (!error) return;
+    track('generate_failed', { code: error.code ?? 'unknown' });
+    if (error.code === 'insufficient_credits') openPricing('insufficient_credits');
   }, [error]);
 
   function changePhotos(update: (current: Record<string, string>) => Record<string, string>) {
@@ -200,15 +208,11 @@ export function TinyDeskTool({
 
   const filled = SLOTS.filter((slot) => photos[slot.id]).map((slot) => slot.id);
   const own = filled.filter((id) => !isOpen(photos[id]));
+  const dogsLeft = filled.filter((id) => isDog(photos[id])).length;
 
   async function onPick(slotId: string, file: File | undefined, via: 'picker' | 'drop') {
     if (!file) return;
     setUploadError(null);
-    if (await photoTooSmall(file)) {
-      track('photo_too_small', { via });
-      setUploadError(m.common_tool_photo_small());
-      return;
-    }
     setUploading(slotId);
     try {
       const path = await uploadReference(file);
@@ -216,8 +220,16 @@ export function TinyDeskTool({
       setHighlight((current) => current.filter((id) => id !== slotId));
       track('photo_added', { slot: slotId, via });
     } catch (e) {
-      track('photo_upload_failed', { via });
-      setUploadError(e instanceof Error ? e.message : m.common_tool_upload_failed());
+      const code = e instanceof ApiError ? e.code : undefined;
+      const tooSmall = code === 'image_too_small';
+      track(tooSmall ? 'photo_too_small' : 'photo_upload_failed', { via, code: code ?? 'network' });
+      setUploadError(
+        tooSmall
+          ? m.common_tool_photo_too_small()
+          : code === 'unsupported_type' || code === 'too_large' || code === 'invalid_image'
+            ? m.common_tool_file_type()
+            : m.common_tool_upload_failed(),
+      );
     } finally {
       setUploading(null);
     }
@@ -323,7 +335,7 @@ export function TinyDeskTool({
     setFileTarget(null);
     const target = fileSeat(event);
     if (!target || uploading) return;
-    const file = [...event.dataTransfer.files].find((f) => ACCEPT.includes(f.type));
+    const file = [...event.dataTransfer.files].find(acceptsUpload);
     if (file) void onPick(target, file, 'drop');
     else setUploadError(m.common_tool_file_type());
   }
@@ -476,7 +488,7 @@ export function TinyDeskTool({
                     else inputs.current.delete(slot.id);
                   }}
                   type="file"
-                  accept={ACCEPT.join(',')}
+                  accept={UPLOAD_ACCEPT}
                   className="sr-only"
                   disabled={uploading !== null}
                   onChange={(e) => void onPick(slot.id, e.target.files?.[0], 'picker')}
@@ -526,6 +538,10 @@ export function TinyDeskTool({
         {m.common_tool_consent()}
       </label>
 
+      {/* With only some seats swapped, say the remaining dogs stay in the video: one order swapped only the lead and expected the other seats not to count. */}
+      {own.length > 0 && dogsLeft > 0 && (
+        <p className="notice">{m.common_tool_dogs_left({ count: dogsLeft, total: SLOTS.length })}</p>
+      )}
       <div className="hero-actions">
         <button type="submit" className="primary" disabled={submitting || preparing}>
           {submitting || preparing ? (

@@ -1370,6 +1370,10 @@ button:disabled {
 .guide table {
   min-width: 34rem;
 }
+/* Small two-column tables need no sideways scroll on phones */
+.guide table.narrow {
+  min-width: 0;
+}
 .guide-intro {
   font-size: 1.1rem;
   margin-top: 1rem;

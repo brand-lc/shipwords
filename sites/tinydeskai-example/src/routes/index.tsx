@@ -121,7 +121,8 @@ export const Route = createFileRoute('/')({
           description: `${m.home_viral_new_lead_hook()} ${m.home_viral_note_ours()}.`,
           thumbnailUrl: `${site.url}/media/sample-new-lead.jpg`,
           contentUrl: `${site.url}/media/sample-new-lead.mp4`,
-          uploadDate: '2026-10-27',
+          // When the first production deploy with the sample-new-lead media finished.
+          uploadDate: '2026-10-27T15:02:46Z',
           duration: 'PT18S',
         },
         {

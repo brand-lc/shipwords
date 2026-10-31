@@ -1,9 +1,9 @@
+import { ApiError } from '@shipwords/core/react/account';
 import { uploadReference } from '@shipwords/jobs/react';
 import { useEffect, useRef, useState } from 'react';
 import { renderSVG } from 'uqr';
 import { track } from '~/lib/track';
 import { m } from '~/paraglide/messages.js';
-import { photoTooSmall } from '~/site/photo-check';
 
 // Upload photos from a phone by QR code (server side in handoff.server.ts).
 // Desktop: a line under the stage ("Photos on your phone? Scan to upload") opens a QR code; photos from the phone fill empty slots in order, and one scan covers the session.
@@ -170,7 +170,7 @@ export function PhoneHandoff({ place }: { place: (paths: string[]) => number }) 
   );
 }
 
-type Sent = { id: number; preview: string; status: 'sending' | 'sent' | 'failed' | 'small' };
+type Sent = { id: number; preview: string; status: 'sending' | 'sent' | 'failed' };
 
 const MAX_SIDE = 2048;
 
@@ -198,6 +198,7 @@ async function shrink(file: File): Promise<Blob> {
 export function PhoneUploadPage({ token }: { token: string }) {
   const [sent, setSent] = useState<Sent[]>([]);
   const [expired, setExpired] = useState(false);
+  const [tooSmall, setTooSmall] = useState(false);
   const nextId = useRef(0);
 
   useEffect(() => {
@@ -224,11 +225,6 @@ export function PhoneUploadPage({ token }: { token: string }) {
     // Upload one at a time: desktop fills slots in registration order, which must match the user's selection.
     for (const { file, id } of batch) {
       try {
-        if (await photoTooSmall(file)) {
-          track('photo_too_small', { via: 'phone' });
-          update(id, 'small');
-          continue;
-        }
         const blob = await shrink(file);
         const path = await uploadReference(new File([blob], file.name, { type: blob.type || file.type }));
         const response = await fetch(`/api/handoff/${token}`, {
@@ -242,7 +238,12 @@ export function PhoneUploadPage({ token }: { token: string }) {
           return;
         }
         update(id, response.ok ? 'sent' : 'failed');
-      } catch {
+      } catch (e) {
+        // The server stops photos whose short side is too small (no face to swap, upstream money wasted); mark it red with its own message.
+        if (e instanceof ApiError && e.code === 'image_too_small') {
+          setTooSmall(true);
+          track('photo_too_small', { via: 'phone' });
+        }
         update(id, 'failed');
       }
     }
@@ -275,16 +276,12 @@ export function PhoneUploadPage({ token }: { token: string }) {
           </label>
           {done > 0 && <p className="mono phone-done">{m.common_phone_sent({ count: done })}</p>}
           {sent.some((item) => item.status === 'failed') && (
-            <p className="error">{m.common_phone_failed()}</p>
+            <p className="error">{tooSmall ? m.common_tool_photo_too_small() : m.common_phone_failed()}</p>
           )}
-          {sent.some((item) => item.status === 'small') && <p className="error">{m.common_phone_small()}</p>}
           {sent.length > 0 && (
             <ul className="phone-sent">
               {sent.map((item) => (
-                <li
-                  key={item.id}
-                  className={`phone-thumb phone-thumb-${item.status === 'small' ? 'failed' : item.status}`}
-                >
+                <li key={item.id} className={`phone-thumb phone-thumb-${item.status}`}>
                   <img src={item.preview} alt="" />
                 </li>
               ))}
