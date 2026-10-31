@@ -14,7 +14,8 @@
     "setup:worktree": "node tools/setup-worktree.mjs",
     "test:tools": "node --test tools/tools.test.mjs",
     "check:packages": "pnpm --filter @shipwords/core --filter @shipwords/jobs check",
-    "check:template": "pnpm --filter ./templates/ai-site check"
+    "check:template": "pnpm --filter ./templates/ai-site check",
+    "check:public": "node tools/check-public.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.3",

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { checkCrawl, inspectHtml } from './check-crawl.mjs';
+import { isScanned, scanText as scanPublic } from './check-public.mjs';
 import { checkSite, devVars, stringLiterals } from './check-site.mjs';
 import { isWorktree, portFor, sitePort } from './dev-port.mjs';
 import { readSiteConfig, readStatus, setVar, TOOLS_ROOT } from './lib.mjs';
@@ -327,4 +328,24 @@ test('new site: dev ports are 10 apart from 5110', () => {
   assert.equal(devPort, 5120);
   assert.equal(sitePort(target), 5120);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('check-public: flags real-looking emails, IDs and live keys, accepts placeholders and package specifiers', () => {
+  const ok = [
+    'noreply@example.com support@acme.test 14013111+me@users.noreply.github.com',
+    '"packageManager": "pnpm@10.30.1" plugin-message-format@4.4.0',
+    '00000000-0000-0000-0000-000000000000 sk_test_xxx whsec_xxx',
+  ].join('\n');
+  assert.deepEqual(scanPublic('a.md', ok), []);
+  const bad = scanPublic(
+    'sites/x/wrangler.jsonc',
+    'me@qq.com G-ABCDEFGH12 12345678-1234-1234-1234-123456789abc sk_live_abc 0123456789abcdef0123456789abcdef',
+  );
+  assert.equal(bad.length, 5);
+  assert.match(bad[0], /wrangler.jsonc:1: email/);
+  assert.deepEqual(scanPublic('apps/www/public/analytics.js', 'G-PJDL19FZTG'), []);
+  assert.equal(isScanned('packages/core/test/auth.test.ts'), false);
+  assert.equal(isScanned('sites/x/migrations/meta/0_snapshot.json'), false);
+  assert.equal(isScanned('pnpm-lock.yaml'), false);
+  assert.equal(isScanned('sites/x/wrangler.jsonc'), true);
 });

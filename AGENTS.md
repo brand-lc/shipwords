@@ -48,6 +48,7 @@ pnpm --filter "./sites/<site>" check       # changed a site: typecheck + build +
 pnpm --filter "...@shipwords/core" check   # changed a core interface: core plus every dependent site
 pnpm check:template                        # changed the template
 pnpm test:tools && pnpm lint               # changed tools or config
+pnpm check:public                          # always in CI: no private-looking values (emails, IDs, live keys) in tracked files
 ```
 
 - Tests run in workerd with an in-memory D1: no ports, no shared database, safe to run in several worktrees at once.

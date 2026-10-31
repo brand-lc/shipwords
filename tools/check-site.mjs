@@ -132,8 +132,8 @@ function serverTexts(dir) {
  * Values from the local .dev.vars (absent in CI), read as dotenv does: optional export prefix, quoted values kept whole,
  * a # after whitespace starts a comment in unquoted ones. Only names are ever printed.
  */
-export function devVars(dir) {
-  const file = path.join(dir, '.dev.vars');
+export function devVars(dir, name = '.dev.vars') {
+  const file = path.join(dir, name);
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, 'utf8')
