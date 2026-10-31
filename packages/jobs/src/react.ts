@@ -36,6 +36,15 @@ const POLL_MS = 2500;
 const UPLOAD_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const UPLOAD_MAX_BYTES = 8 * 1024 * 1024;
 const UPLOAD_MAX_SIDE = 2560;
+const HEIC = /\.hei[cf]$/i;
+
+/** For file inputs: HEIC is listed so desktop pickers don't hide iPhone photos; uploadReference converts it where the browser can decode it. */
+export const UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif';
+
+/** For drag and drop: whether a dropped file is worth trying (Windows often reports HEIC with an empty type). */
+export function acceptsUpload(file: File): boolean {
+  return file.type.startsWith('image/') || HEIC.test(file.name);
+}
 
 async function fitForUpload(file: File): Promise<Blob> {
   if (file.size <= UPLOAD_MAX_BYTES && UPLOAD_TYPES.has(file.type)) return file;
@@ -45,14 +54,24 @@ async function fitForUpload(file: File): Promise<Blob> {
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);
-    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext('2d')!;
+    // JPEG has no alpha: without a fill, transparent areas turn black.
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-    return blob ?? file;
+    if (blob) return blob;
   } catch {
-    // The browser can't decode it: send it as is and let the server say why.
-    return file;
+    // Not decodable here (HEIC outside Safari, for one); fall through.
   }
+  if (UPLOAD_TYPES.has(file.type)) return file;
+  throw new ApiError(
+    "This browser can't read this photo format. Use a JPG or PNG.",
+    'unsupported_type',
+    415,
+    {},
+  );
 }
 
 export async function uploadReference(file: File): Promise<string> {

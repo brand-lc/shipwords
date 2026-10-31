@@ -1,6 +1,6 @@
 import { pageHead } from '@shipwords/core/seo';
 import { creditsFor, sanitizeParameters } from '@shipwords/jobs/models';
-import { type PublicJob, uploadReference, useGeneration } from '@shipwords/jobs/react';
+import { type PublicJob, UPLOAD_ACCEPT, uploadReference, useGeneration } from '@shipwords/jobs/react';
 import { createFileRoute, getRouteApi } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { authClient } from '~/lib/auth';
@@ -191,7 +191,7 @@ function ToolPage() {
                 {m.home_tool_references({ count: references.length, max: model.maxReferences })}
                 <input
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept={UPLOAD_ACCEPT}
                   multiple
                   disabled={references.length >= model.maxReferences}
                   onChange={(e) => void onUpload(e.target.files)}

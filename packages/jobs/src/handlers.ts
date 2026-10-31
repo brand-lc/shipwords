@@ -313,13 +313,16 @@ export function createJobs(core: Core, models: readonly ModelDefinition[]) {
           ? [{ key: `upload:ip:${ipBucket(ip)}`, window: dayWindow(), limit: UPLOADS_PER_DAY * 2 }]
           : []),
       ]);
-      if (!allowed) return errorResponse(429, 'upload_limit');
+      if (!allowed)
+        return errorResponse(429, 'upload_limit', "You've reached today's upload limit. Try again tomorrow.");
       const type = request.headers.get('content-type')?.split(';')[0]?.trim() ?? '';
-      if (!UPLOAD_TYPES.has(type)) return errorResponse(415, 'unsupported_type');
+      if (!UPLOAD_TYPES.has(type))
+        return errorResponse(415, 'unsupported_type', 'Use a JPG, PNG or WebP photo.');
+      const tooLarge = () => errorResponse(413, 'too_large', 'This photo is over 10 MB. Use a smaller one.');
       const length = Number(request.headers.get('content-length') ?? '0');
-      if (!length || length > MAX_UPLOAD_BYTES) return errorResponse(413, 'too_large');
+      if (!length || length > MAX_UPLOAD_BYTES) return tooLarge();
       const bytes = await request.arrayBuffer();
-      if (bytes.byteLength > MAX_UPLOAD_BYTES) return errorResponse(413, 'too_large');
+      if (bytes.byteLength > MAX_UPLOAD_BYTES) return tooLarge();
       const size = imageSize(bytes);
       if (!size) return errorResponse(415, 'invalid_image', 'This file is not a readable image.');
       if (Math.min(size.width, size.height) < MIN_UPLOAD_SIDE) {
